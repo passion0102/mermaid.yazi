@@ -1,4 +1,9 @@
+--- @sync entry
 -- mermaid.yazi — render mermaid diagrams in yazi previews via mermaid.ink
+--
+-- The `--- @sync entry` magic comment above marks M:entry as a sync
+-- callback so it can read `cx.active`. Without it, the toggle-mode /
+-- zoom keymap entries cannot observe the current preview state.
 --
 -- This file bundles parser/encoder/cache because yazi's `require` only
 -- resolves plugin-level modules (`<plugin>.<file>` -> `<plugin>.yazi/<file>.lua`)
@@ -248,14 +253,19 @@ local function detect_timeout_cmd()
   elseif has("timeout") then
     picked = "timeout"
   else
-    picked = "none"
+    picked = nil
   end
-  local wf = io.open(cache_path, "w")
-  if wf then
-    wf:write(picked)
-    wf:close()
+  -- Only memoize positive detection — a negative result must not stick
+  -- across PATH changes (Codex 2nd review SHOULD #5). Re-detecting "none"
+  -- on every peek is two `command -v` calls, which is cheap.
+  if picked then
+    local wf = io.open(cache_path, "w")
+    if wf then
+      wf:write(picked)
+      wf:close()
+    end
   end
-  return (picked ~= "none") and picked or nil
+  return picked
 end
 
 local GLOW_TIMEOUT_SEC = "15"
@@ -454,10 +464,17 @@ local function cached_glow_render(content, width, path)
   end
 
   local out = spawn_glow(width, path)
-  local text = (out and out.stdout) or "(glow failed or timed out)"
+  if not out or not out.status or not out.status.success then
+    -- Failure: do NOT cache (Codex 2nd review SHOULD #4). A timeout or a
+    -- partial stdout would otherwise stick as the "rendered" version for
+    -- this content forever. Return a transient marker so the next peek
+    -- retries glow instead of reading stale cache.
+    return "(glow failed or timed out — will retry on next peek)"
+  end
+  local text = out.stdout or ""
 
-  -- Atomic write: tmp file then rename. PID + nanosecond-ish suffix to
-  -- avoid two peeks colliding on the same tmp name.
+  -- Atomic write: tmp file then rename. PID + time suffix to avoid two
+  -- peeks colliding on the same tmp name.
   local tmp_file = string.format("%s.tmp.%d-%d", cache_file, os.time(), math.random(100000, 999999))
   local wf = io.open(tmp_file, "w")
   if wf then
@@ -499,9 +516,15 @@ local function render_md_composed(job, path, content, blocks)
     top_area, bottom_area = areas[1], areas[2]
   end
 
-  local visible_text = ""
-  local skip = 0
+  -- Skip is computed regardless of mode so image-only previews still
+  -- track seek and can scroll between mermaid blocks (Codex 2nd review
+  -- MUST #2). image-only has no glow output, so we cannot clamp against
+  -- glow line count; clamp to a soft bound and let pick_block_for_window
+  -- pick the last block when skip overshoots.
+  local raw_skip = math.max(0, job.skip or 0)
+  local skip = raw_skip
   local window_h = (top_area and top_area.h) or job.area.h
+  local visible_text = ""
   if top_area then
     local glow_text = cached_glow_render(content, top_area.w, path)
 
@@ -510,7 +533,12 @@ local function render_md_composed(job, path, content, blocks)
       lines[#lines + 1] = line
     end
     local total = #lines
-    skip = math.max(0, math.min(job.skip or 0, math.max(0, total - 1)))
+    skip = math.max(0, math.min(raw_skip, math.max(0, total - 1)))
+    if skip ~= raw_skip then
+      -- Push the clamped value back to yazi so further scrolls start from
+      -- the in-range position (Codex 2nd review SHOULD #3).
+      ya.emit("peek", { skip, only_if = job.file.url, upper_bound = true })
+    end
     local last = math.min(total, skip + window_h)
     local visible = {}
     for i = skip + 1, last do
@@ -558,8 +586,11 @@ local function render_md_composed(job, path, content, blocks)
 end
 
 -- Plugin entry: invoked by `plugin mermaid -- <subcommand>` from yazi
--- keymap. Used to toggle/select the preview mode.
-function M:entry(_, job)
+-- keymap. Used to toggle/select the preview mode. With colon notation
+-- the implicit self consumes the first arg, so the job argument that
+-- actually carries `args` from the keymap is the single declared
+-- parameter.
+function M:entry(job)
   local args = job and job.args or {}
   local cmd = args[1]
   if cmd == "toggle-mode" then
