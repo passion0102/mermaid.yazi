@@ -158,7 +158,7 @@ function M:setup(opts)
 end
 
 local function message(job, text)
-  ya.preview_widget(job, ui.Text.parse(text):area(job.area))
+  ya.preview_widget(job, ui.Text.parse(text):area(job.area):wrap(ui.Wrap.YES))
 end
 
 local function resolve_source(job, content)
@@ -184,6 +184,10 @@ local function file_exists(path)
   return false
 end
 
+local function trim(s)
+  return (s:gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
 local function ensure_cached(cache_path, source)
   if file_exists(cache_path) then
     return true, nil
@@ -191,13 +195,38 @@ local function ensure_cached(cache_path, source)
   local image_url = encoder.image_url(source, { format = config.format })
   local output, err = Command("curl")
     :arg({ "-fsSL", "--max-time", tostring(config.timeout), "-o", cache_path, image_url })
+    :stderr(Command.PIPED)
+    :output()
+  if err then
+    return false, "curl spawn error: " .. tostring(err)
+  end
+  if not output or not output.status or not output.status.success then
+    local detail = output and output.stderr and trim(output.stderr) or ""
+    if #detail == 0 then
+      detail = "no stderr output"
+    elseif #detail > 200 then
+      detail = detail:sub(1, 200) .. "..."
+    end
+    return false, "fetch failed (" .. detail .. ")"
+  end
+  return true, nil
+end
+
+local function try_glow_fallback(job)
+  local path = tostring(job.file.url)
+  if not path:match("%.md$") then
+    return false
+  end
+  local output, err = Command("glow")
+    :arg({ "--style", "dark", "--width", tostring(job.area.w), path })
     :stdout(Command.PIPED)
     :stderr(Command.PIPED)
     :output()
   if err or not output or not output.status or not output.status.success then
-    return false, "fetch failed"
+    return false
   end
-  return true, nil
+  ya.preview_widget(job, ui.Text.parse(output.stdout or ""):area(job.area))
+  return true
 end
 
 function M:peek(job)
@@ -214,6 +243,9 @@ function M:peek(job)
 
   local source = resolve_source(job, content)
   if not source then
+    if try_glow_fallback(job) then
+      return
+    end
     return message(job, "mermaid.yazi: no mermaid blocks found")
   end
 
