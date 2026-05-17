@@ -35,8 +35,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/cache@v4
+        id: cache-selene
         with:
           path: ~/.cargo/bin/selene
           key: ${{ runner.os }}-selene-v1
-      - run: cargo install selene
+      - if: steps.cache-selene.outputs.cache-hit != 'true'
+        run: cargo install selene
       - run: selene lib
