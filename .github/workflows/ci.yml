@@ -39,4 +39,4 @@ jobs:
           path: ~/.cargo/bin/selene
           key: ${{ runner.os }}-selene-v1
       - run: cargo install selene
-      - run: selene lib main.lua
+      - run: selene lib

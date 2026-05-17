@@ -54,7 +54,7 @@ export PATH="$HOME/.luarocks/bin:$PATH"
 busted
 
 # Lint and format
-selene lib main.lua
+selene lib
 stylua --check .
 stylua .          # format in place
 ```
