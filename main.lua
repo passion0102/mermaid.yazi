@@ -229,6 +229,58 @@ local function try_glow_fallback(job)
   return true
 end
 
+local function render_image_full(job, source)
+  local cache_path = cache.path(source, { ext = "png" })
+  local ok, err = ensure_cached(cache_path, source)
+  if not ok then
+    return message(job, "mermaid.yazi: " .. tostring(err))
+  end
+  local _, show_err = ya.image_show(Url(cache_path), job.area)
+  if show_err then
+    return message(job, "mermaid.yazi: " .. tostring(show_err))
+  end
+end
+
+local A3_IMAGE_ROWS_MAX = 20
+local A3_IMAGE_ROWS_MIN = 8
+
+-- Switch-mode A3: glow renders the full md on top, and the *currently
+-- selected* mermaid block (skip-th, 0-based) is the single image at the
+-- bottom. Multiple ya.image_show calls per peek work (H3) but flicker
+-- under terminal image protocols, so we keep one image and use seek to
+-- switch between blocks.
+local function render_md_composed(job, path, _content, blocks)
+  local image_rows = math.min(A3_IMAGE_ROWS_MAX, math.floor(job.area.h / 2))
+  if image_rows < A3_IMAGE_ROWS_MIN then
+    image_rows = math.min(A3_IMAGE_ROWS_MIN, job.area.h - 1)
+  end
+  local areas = ui.Layout()
+    :direction(ui.Layout.VERTICAL)
+    :constraints({ ui.Constraint.Fill(1), ui.Constraint.Length(image_rows) })
+    :split(job.area)
+  local top_area, bottom_area = areas[1], areas[2]
+
+  local idx = math.max(1, math.min(#blocks, (job.skip or 0) + 1))
+  local block = blocks[idx]
+
+  local cache_path = cache.path(block.code, { ext = "png" })
+  local ok, err = ensure_cached(cache_path, block.code)
+  if not ok then
+    return message(job, "mermaid.yazi: " .. tostring(err))
+  end
+
+  local out = Command("glow")
+    :arg({ "--style", "dark", "--width", tostring(top_area.w), path })
+    :stdout(Command.PIPED)
+    :stderr(Command.PIPED)
+    :output()
+  local glow_text = (out and out.stdout) or "(glow failed)"
+  local caption = string.format("\n[mermaid %d/%d — j/k to switch]\n", idx, #blocks)
+
+  ya.preview_widget(job, ui.Text.parse(glow_text .. caption):area(top_area):wrap(ui.Wrap.YES))
+  ya.image_show(Url(cache_path), bottom_area)
+end
+
 function M:peek(job)
   local path = tostring(job.file.url)
   local f, open_err = io.open(path, "r")
@@ -241,31 +293,33 @@ function M:peek(job)
     return message(job, "mermaid.yazi: empty file")
   end
 
-  local source = resolve_source(job, content)
-  if not source then
-    if try_glow_fallback(job) then
-      return
+  local ext = path:match("%.([^%.]+)$")
+
+  if ext == "mmd" or ext == "mermaid" then
+    return render_image_full(job, content)
+  end
+
+  if ext == "md" then
+    local blocks = parser.extract_mermaid_blocks(content)
+    if #blocks == 0 then
+      if try_glow_fallback(job) then
+        return
+      end
+      return message(job, "mermaid.yazi: no mermaid blocks found")
     end
-    return message(job, "mermaid.yazi: no mermaid blocks found")
+    return render_md_composed(job, path, content, blocks)
   end
 
-  local cache_path = cache.path(source, { ext = config.format == "svg" and "svg" or "png" })
-
-  local ok, err = ensure_cached(cache_path, source)
-  if not ok then
-    return message(job, "mermaid.yazi: " .. tostring(err))
-  end
-
-  local _, show_err = ya.image_show(Url(cache_path), job.area)
-  if show_err then
-    return message(job, "mermaid.yazi: " .. tostring(show_err))
-  end
+  return message(job, "mermaid.yazi: unsupported extension")
 end
 
 function M:seek(job)
   local step = ya.clamp(-1, job.units or 0, 1)
   local current = (cx.active.preview and cx.active.preview.skip) or 0
-  ya.emit("peek", { math.max(0, current + step), only_if = job.file.url })
+  -- Clamp upper bound to total blocks - 1 if we know it; otherwise just
+  -- let peek's own clamp handle it.
+  local next_skip = math.max(0, current + step)
+  ya.emit("peek", { next_skip, only_if = job.file.url })
 end
 
 return M
