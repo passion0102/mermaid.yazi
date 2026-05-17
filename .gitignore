@@ -1,0 +1,6 @@
+.DS_Store
+.luarocks/
+.busted_cache/
+*.png
+*.svg
+node_modules/
