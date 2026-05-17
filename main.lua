@@ -225,7 +225,25 @@ local function try_glow_fallback(job)
   if err or not output or not output.status or not output.status.success then
     return false
   end
-  ya.preview_widget(job, ui.Text.parse(output.stdout or ""):area(job.area))
+
+  -- Slice glow output by skip so long, mermaid-less docs scroll.
+  local text = output.stdout or ""
+  local lines = {}
+  for line in (text .. "\n"):gmatch("(.-)\n") do
+    lines[#lines + 1] = line
+  end
+  local total = #lines
+  local skip = math.max(0, math.min(job.skip or 0, math.max(0, total - 1)))
+  local last = math.min(total, skip + job.area.h)
+  local visible = {}
+  for i = skip + 1, last do
+    visible[#visible + 1] = lines[i]
+  end
+
+  ya.preview_widget(
+    job,
+    ui.Text.parse(table.concat(visible, "\n")):area(job.area):wrap(ui.Wrap.YES)
+  )
   return true
 end
 
@@ -244,24 +262,220 @@ end
 local A3_IMAGE_ROWS_MAX = 20
 local A3_IMAGE_ROWS_MIN = 8
 
--- Switch-mode A3: glow renders the full md on top, and the *currently
--- selected* mermaid block (skip-th, 0-based) is the single image at the
--- bottom. Multiple ya.image_show calls per peek work (H3) but flicker
--- under terminal image protocols, so we keep one image and use seek to
--- switch between blocks.
-local function render_md_composed(job, path, _content, blocks)
-  local image_rows = math.min(A3_IMAGE_ROWS_MAX, math.floor(job.area.h / 2))
-  if image_rows < A3_IMAGE_ROWS_MIN then
-    image_rows = math.min(A3_IMAGE_ROWS_MIN, job.area.h - 1)
-  end
-  local areas = ui.Layout()
-    :direction(ui.Layout.VERTICAL)
-    :constraints({ ui.Constraint.Fill(1), ui.Constraint.Length(image_rows) })
-    :split(job.area)
-  local top_area, bottom_area = areas[1], areas[2]
+local MODE_FILE = "/tmp/mermaid-yazi-mode"
+local MODE_SPLIT, MODE_IMAGE, MODE_TEXT = "split", "image", "text"
 
-  local idx = math.max(1, math.min(#blocks, (job.skip or 0) + 1))
-  local block = blocks[idx]
+local function get_mode()
+  local f = io.open(MODE_FILE, "r")
+  if not f then
+    return MODE_SPLIT
+  end
+  local mode = (f:read("*all") or ""):gsub("%s+", "")
+  f:close()
+  if mode == MODE_IMAGE or mode == MODE_TEXT then
+    return mode
+  end
+  return MODE_SPLIT
+end
+
+local function set_mode(mode)
+  local f = io.open(MODE_FILE, "w")
+  if f then
+    f:write(mode)
+    f:close()
+  end
+end
+
+local ROWS_FILE = "/tmp/mermaid-yazi-rows"
+local ROW_STEPS = { 6, 8, 12, 16, 20, 25, 30, 40 }
+local DEFAULT_ROW_IDX = 3 -- 12 rows (was 20; users prefer text taking more space by default)
+
+local function get_row_step()
+  local f = io.open(ROWS_FILE, "r")
+  if not f then
+    return DEFAULT_ROW_IDX
+  end
+  local raw = (f:read("*all") or ""):gsub("%s+", "")
+  f:close()
+  local n = tonumber(raw)
+  if not n or n < 1 or n > #ROW_STEPS then
+    return DEFAULT_ROW_IDX
+  end
+  return n
+end
+
+local function set_row_step(idx)
+  if idx < 1 then
+    idx = 1
+  end
+  if idx > #ROW_STEPS then
+    idx = #ROW_STEPS
+  end
+  local f = io.open(ROWS_FILE, "w")
+  if f then
+    f:write(tostring(idx))
+    f:close()
+  end
+end
+
+-- A3 scroll-mode: skip is a line offset into glow's rendered output.
+-- Slicing the glow text lets users scroll long documents normally, and
+-- we pick whichever mermaid block intersects the visible window for the
+-- image area. Compared to the earlier switch-mode this trades explicit
+-- "block N/M" navigation for a more natural "scroll and see" flow that
+-- works on documents much longer than the preview area.
+local function pick_block_for_window(blocks, window_start, window_end)
+  local fallback = blocks[1]
+  for _, block in ipairs(blocks) do
+    if block.end_line >= window_start and block.start_line <= window_end then
+      return block
+    end
+    if block.start_line <= window_end then
+      fallback = block
+    end
+  end
+  return fallback
+end
+
+-- Tiny on-disk memo: per md file, what image+area we last showed, so we
+-- can avoid re-emitting ya.image_show for the same payload (terminals
+-- flicker when the same image is re-sent during rapid scrolling).
+local function shown_state_path(file_path)
+  local hash
+  if _G.ya and type(_G.ya.hash) == "function" then
+    hash = _G.ya.hash(file_path)
+  else
+    local h = 5381
+    for i = 1, #file_path do
+      h = (h * 33 + string.byte(file_path, i)) % 4294967296
+    end
+    hash = string.format("%08x", h)
+  end
+  return "/tmp/mermaid-yazi-shown-" .. tostring(hash)
+end
+
+local function read_shown_state(file_path)
+  local f = io.open(shown_state_path(file_path), "r")
+  if not f then
+    return nil
+  end
+  local data = f:read("*all")
+  f:close()
+  return data
+end
+
+local function write_shown_state(file_path, key)
+  local f = io.open(shown_state_path(file_path), "w")
+  if f then
+    f:write(key)
+    f:close()
+  end
+end
+
+-- Cache glow output on disk keyed by (content + width). Re-running glow on
+-- every scroll tick is the dominant cost, so reuse the rendered ANSI as
+-- long as the file content and target width haven't changed.
+local function cached_glow_render(content, width, path)
+  local key_input = content .. "::" .. tostring(width)
+  local hash
+  if _G.ya and type(_G.ya.hash) == "function" then
+    hash = _G.ya.hash(key_input)
+  else
+    local h = 5381
+    for i = 1, #key_input do
+      h = (h * 33 + string.byte(key_input, i)) % 4294967296
+    end
+    hash = string.format("%08x", h)
+  end
+  local cache_file = "/tmp/mermaid-yazi-glow-" .. tostring(hash) .. ".ans"
+
+  local f = io.open(cache_file, "r")
+  if f then
+    local text = f:read("*all")
+    f:close()
+    if text and #text > 0 then
+      return text
+    end
+  end
+
+  local out = Command("glow")
+    :arg({ "--style", "dark", "--width", tostring(width), path })
+    :stdout(Command.PIPED)
+    :stderr(Command.PIPED)
+    :output()
+  local text = (out and out.stdout) or "(glow failed)"
+
+  local wf = io.open(cache_file, "w")
+  if wf then
+    wf:write(text)
+    wf:close()
+  end
+  return text
+end
+
+local function render_md_composed(job, path, content, blocks)
+  local start = os.clock()
+  local mode = get_mode()
+
+  local top_area, bottom_area
+  if mode == MODE_IMAGE then
+    -- Image-only: full area is the image; no text widget at all.
+    top_area = nil
+    bottom_area = job.area
+  elseif mode == MODE_TEXT then
+    -- Text-only: full area is the text; image area unused.
+    top_area = job.area
+    bottom_area = nil
+  else
+    -- Split (default).
+    local image_rows = ROW_STEPS[get_row_step()] or A3_IMAGE_ROWS_MAX
+    -- Don't let the image push the text completely out of view.
+    local cap = math.max(1, math.floor(job.area.h * 0.7))
+    if image_rows > cap then
+      image_rows = cap
+    end
+    if image_rows < A3_IMAGE_ROWS_MIN then
+      image_rows = math.min(A3_IMAGE_ROWS_MIN, job.area.h - 1)
+    end
+    local areas = ui.Layout()
+      :direction(ui.Layout.VERTICAL)
+      :constraints({ ui.Constraint.Fill(1), ui.Constraint.Length(image_rows) })
+      :split(job.area)
+    top_area, bottom_area = areas[1], areas[2]
+  end
+
+  local visible_text = ""
+  local skip = 0
+  local window_h = (top_area and top_area.h) or job.area.h
+  if top_area then
+    local glow_text = cached_glow_render(content, top_area.w, path)
+
+    local lines = {}
+    for line in (glow_text .. "\n"):gmatch("(.-)\n") do
+      lines[#lines + 1] = line
+    end
+    local total = #lines
+    skip = math.max(0, math.min(job.skip or 0, math.max(0, total - 1)))
+    local last = math.min(total, skip + window_h)
+    local visible = {}
+    for i = skip + 1, last do
+      visible[#visible + 1] = lines[i]
+    end
+    visible_text = table.concat(visible, "\n")
+  end
+
+  -- glow output line numbers diverge from md line numbers (decorations
+  -- and wrapping shift things) but the visible window mapped onto the
+  -- same skip is a good-enough proxy for "what block am I looking at".
+  local block = pick_block_for_window(blocks, skip + 1, skip + window_h)
+
+  local block_idx = 1
+  for i, b in ipairs(blocks) do
+    if b == block then
+      block_idx = i
+      break
+    end
+  end
 
   local cache_path = cache.path(block.code, { ext = "png" })
   local ok, err = ensure_cached(cache_path, block.code)
@@ -269,16 +483,54 @@ local function render_md_composed(job, path, _content, blocks)
     return message(job, "mermaid.yazi: " .. tostring(err))
   end
 
-  local out = Command("glow")
-    :arg({ "--style", "dark", "--width", tostring(top_area.w), path })
-    :stdout(Command.PIPED)
-    :stderr(Command.PIPED)
-    :output()
-  local glow_text = (out and out.stdout) or "(glow failed)"
-  local caption = string.format("\n[mermaid %d/%d — j/k to switch]\n", idx, #blocks)
+  if top_area then
+    local caption = string.format("\n[mermaid %d/%d  mode=%s]", block_idx, #blocks, mode)
+    ya.preview_widget(job, ui.Text.parse(visible_text .. caption):area(top_area):wrap(ui.Wrap.YES))
+  end
 
-  ya.preview_widget(job, ui.Text.parse(glow_text .. caption):area(top_area):wrap(ui.Wrap.YES))
-  ya.image_show(Url(cache_path), bottom_area)
+  if bottom_area then
+    -- Skip image_show if the same image is already on screen at the same
+    -- area. This prevents flicker while scrolling through a section that
+    -- maps to one block.
+    local show_key = string.format("%s|%dx%d|%s", cache_path, bottom_area.w, bottom_area.h, mode)
+    if read_shown_state(path) ~= show_key then
+      local delay = (rt and rt.preview and rt.preview.image_delay or 0) / 1000
+      ya.sleep(math.max(0, delay + start - os.clock()))
+      ya.image_show(Url(cache_path), bottom_area)
+      write_shown_state(path, show_key)
+    end
+  end
+end
+
+-- Plugin entry: invoked by `plugin mermaid -- <subcommand>` from yazi
+-- keymap. Used to toggle/select the preview mode.
+function M:entry(_, job)
+  local args = job and job.args or {}
+  local cmd = args[1]
+  if cmd == "toggle-mode" then
+    local cur = get_mode()
+    local nxt = MODE_SPLIT
+    if cur == MODE_SPLIT then
+      nxt = MODE_IMAGE
+    elseif cur == MODE_IMAGE then
+      nxt = MODE_TEXT
+    end
+    set_mode(nxt)
+  elseif cmd == MODE_SPLIT or cmd == MODE_IMAGE or cmd == MODE_TEXT then
+    set_mode(cmd)
+  elseif cmd == "zoom-in" then
+    set_row_step(get_row_step() + 1)
+    set_mode(MODE_SPLIT)
+  elseif cmd == "zoom-out" then
+    set_row_step(get_row_step() - 1)
+    set_mode(MODE_SPLIT)
+  end
+  -- Force the previewer to recompute with the new mode.
+  ya.emit("peek", {
+    (cx.active.preview and cx.active.preview.skip) or 0,
+    only_if = cx.active.current.hovered.url,
+    force = true,
+  })
 end
 
 function M:peek(job)
@@ -287,7 +539,7 @@ function M:peek(job)
   if not f then
     return message(job, "mermaid.yazi: cannot open file (" .. tostring(open_err) .. ")")
   end
-  local content = f:read(1024 * 1024)
+  local content = f:read(8 * 1024 * 1024) -- 8MB; some design docs exceed 4MB once embedded assets accumulate
   f:close()
   if not content then
     return message(job, "mermaid.yazi: empty file")
@@ -314,11 +566,13 @@ function M:peek(job)
 end
 
 function M:seek(job)
-  local step = ya.clamp(-1, job.units or 0, 1)
+  -- job.units is the requested seek delta (lines for keymap seek N, rows
+  -- for trackpad scroll events). Earlier this was clamped to ±1 (intended
+  -- for "switch one mermaid block at a time"), which broke long-document
+  -- scrolling. Pass it through so seek 5 / trackpad gestures land all the
+  -- requested rows.
   local current = (cx.active.preview and cx.active.preview.skip) or 0
-  -- Clamp upper bound to total blocks - 1 if we know it; otherwise just
-  -- let peek's own clamp handle it.
-  local next_skip = math.max(0, current + step)
+  local next_skip = math.max(0, current + (job.units or 0))
   ya.emit("peek", { next_skip, only_if = job.file.url })
 end
 
