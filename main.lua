@@ -212,17 +212,80 @@ local function ensure_cached(cache_path, source)
   return true, nil
 end
 
+local function file_size_or_zero(path)
+  local f = io.open(path, "rb")
+  if not f then
+    return 0
+  end
+  local size = f:seek("end") or 0
+  f:close()
+  return size
+end
+
+-- Detect a timeout-bounded wrapper (gtimeout from coreutils on macOS,
+-- timeout on Linux). Cache the result to /tmp so we don't re-shell on
+-- every peek. Returns the wrapper name or nil when neither is available.
+local function detect_timeout_cmd()
+  local cache_path = "/tmp/mermaid-yazi-timeout-cmd"
+  local cached = io.open(cache_path, "r")
+  if cached then
+    local v = (cached:read("*all") or ""):gsub("%s+", "")
+    cached:close()
+    if v == "gtimeout" or v == "timeout" then
+      return v
+    end
+    if v == "none" then
+      return nil
+    end
+  end
+  local function has(bin)
+    local out = Command("sh"):arg({ "-c", "command -v " .. bin }):stdout(Command.PIPED):output()
+    return out and out.status and out.status.success
+  end
+  local picked
+  if has("gtimeout") then
+    picked = "gtimeout"
+  elseif has("timeout") then
+    picked = "timeout"
+  else
+    picked = "none"
+  end
+  local wf = io.open(cache_path, "w")
+  if wf then
+    wf:write(picked)
+    wf:close()
+  end
+  return (picked ~= "none") and picked or nil
+end
+
+local GLOW_TIMEOUT_SEC = "15"
+
+-- Run glow with a hard wall-clock cap so a hung glow doesn't freeze the
+-- preview pipeline (Codex review SHOULD #4). Returns the output table the
+-- caller can interrogate just like a plain Command(...) result.
+local function spawn_glow(width, path)
+  local timeout_cmd = detect_timeout_cmd()
+  if timeout_cmd then
+    return Command(timeout_cmd)
+      :arg({ GLOW_TIMEOUT_SEC, "glow", "--style", "dark", "--width", tostring(width), path })
+      :stdout(Command.PIPED)
+      :stderr(Command.PIPED)
+      :output()
+  end
+  return Command("glow")
+    :arg({ "--style", "dark", "--width", tostring(width), path })
+    :stdout(Command.PIPED)
+    :stderr(Command.PIPED)
+    :output()
+end
+
 local function try_glow_fallback(job)
   local path = tostring(job.file.url)
   if not path:match("%.md$") then
     return false
   end
-  local output, err = Command("glow")
-    :arg({ "--style", "dark", "--width", tostring(job.area.w), path })
-    :stdout(Command.PIPED)
-    :stderr(Command.PIPED)
-    :output()
-  if err or not output or not output.status or not output.status.success then
+  local output = spawn_glow(job.area.w, path)
+  if not output or not output.status or not output.status.success then
     return false
   end
 
@@ -262,7 +325,23 @@ end
 local A3_IMAGE_ROWS_MAX = 20
 local A3_IMAGE_ROWS_MIN = 8
 
-local MODE_FILE = "/tmp/mermaid-yazi-mode"
+-- State files are suffixed by a hash of $PWD so two yazi sessions that
+-- happen to be open in different directories don't clobber each other's
+-- mode/zoom (Codex review SHOULD #5). True session isolation needs a yazi
+-- API that does not exist today; this is best-effort.
+local CWD_SUFFIX = (function()
+  local cwd = os.getenv("PWD") or "default"
+  if _G.ya and type(_G.ya.hash) == "function" then
+    return _G.ya.hash(cwd)
+  end
+  local h = 5381
+  for i = 1, #cwd do
+    h = (h * 33 + string.byte(cwd, i)) % 4294967296
+  end
+  return string.format("%08x", h)
+end)()
+
+local MODE_FILE = "/tmp/mermaid-yazi-mode-" .. CWD_SUFFIX
 local MODE_SPLIT, MODE_IMAGE, MODE_TEXT = "split", "image", "text"
 
 local function get_mode()
@@ -286,7 +365,7 @@ local function set_mode(mode)
   end
 end
 
-local ROWS_FILE = "/tmp/mermaid-yazi-rows"
+local ROWS_FILE = "/tmp/mermaid-yazi-rows-" .. CWD_SUFFIX
 local ROW_STEPS = { 6, 8, 12, 16, 20, 25, 30, 40 }
 local DEFAULT_ROW_IDX = 3 -- 12 rows (was 20; users prefer text taking more space by default)
 
@@ -337,46 +416,22 @@ local function pick_block_for_window(blocks, window_start, window_end)
   return fallback
 end
 
--- Tiny on-disk memo: per md file, what image+area we last showed, so we
--- can avoid re-emitting ya.image_show for the same payload (terminals
--- flicker when the same image is re-sent during rapid scrolling).
-local function shown_state_path(file_path)
-  local hash
-  if _G.ya and type(_G.ya.hash) == "function" then
-    hash = _G.ya.hash(file_path)
-  else
-    local h = 5381
-    for i = 1, #file_path do
-      h = (h * 33 + string.byte(file_path, i)) % 4294967296
-    end
-    hash = string.format("%08x", h)
-  end
-  return "/tmp/mermaid-yazi-shown-" .. tostring(hash)
-end
+-- (Removed: per-file shown_state dedup.) The Codex review pointed out that
+-- a /tmp-backed memo of "what image is currently on screen" misfires across
+-- yazi sessions, after switching files, or after a mode toggle, leaving the
+-- preview blank or showing a stale image. We re-emit ya.image_show on every
+-- peek and rely on rt.preview.image_delay (ya.sleep below) to absorb the
+-- terminal protocol cost during rapid scrolling.
 
-local function read_shown_state(file_path)
-  local f = io.open(shown_state_path(file_path), "r")
-  if not f then
-    return nil
-  end
-  local data = f:read("*all")
-  f:close()
-  return data
-end
-
-local function write_shown_state(file_path, key)
-  local f = io.open(shown_state_path(file_path), "w")
-  if f then
-    f:write(key)
-    f:close()
-  end
-end
-
--- Cache glow output on disk keyed by (content + width). Re-running glow on
--- every scroll tick is the dominant cost, so reuse the rendered ANSI as
--- long as the file content and target width haven't changed.
+-- Cache glow output on disk keyed by (path + file size + content hash +
+-- width). The full file size is part of the key so a change beyond our
+-- read limit still busts the cache (Codex review MUST #2 — the previous
+-- key only saw the first N bytes we read in M:peek). Write goes through
+-- a unique tmp file + rename so a concurrent peek never reads a half-
+-- written ANSI cache (Codex MUST #3).
 local function cached_glow_render(content, width, path)
-  local key_input = content .. "::" .. tostring(width)
+  local size = file_size_or_zero(path)
+  local key_input = path .. "::" .. tostring(size) .. "::" .. content .. "::" .. tostring(width)
   local hash
   if _G.ya and type(_G.ya.hash) == "function" then
     hash = _G.ya.hash(key_input)
@@ -398,17 +453,17 @@ local function cached_glow_render(content, width, path)
     end
   end
 
-  local out = Command("glow")
-    :arg({ "--style", "dark", "--width", tostring(width), path })
-    :stdout(Command.PIPED)
-    :stderr(Command.PIPED)
-    :output()
-  local text = (out and out.stdout) or "(glow failed)"
+  local out = spawn_glow(width, path)
+  local text = (out and out.stdout) or "(glow failed or timed out)"
 
-  local wf = io.open(cache_file, "w")
+  -- Atomic write: tmp file then rename. PID + nanosecond-ish suffix to
+  -- avoid two peeks colliding on the same tmp name.
+  local tmp_file = string.format("%s.tmp.%d-%d", cache_file, os.time(), math.random(100000, 999999))
+  local wf = io.open(tmp_file, "w")
   if wf then
     wf:write(text)
     wf:close()
+    os.rename(tmp_file, cache_file)
   end
   return text
 end
@@ -484,21 +539,21 @@ local function render_md_composed(job, path, content, blocks)
   end
 
   if top_area then
-    local caption = string.format("\n[mermaid %d/%d  mode=%s]", block_idx, #blocks, mode)
+    -- Caption marks the auto-selected block as approximate because glow's
+    -- decorated output line numbers diverge from the raw md line numbers
+    -- pick_block_for_window compares against (Codex review SHOULD #6).
+    local marker = (#blocks > 1) and " ~" or ""
+    local caption = string.format("\n[mermaid %d/%d%s  mode=%s]", block_idx, #blocks, marker, mode)
     ya.preview_widget(job, ui.Text.parse(visible_text .. caption):area(top_area):wrap(ui.Wrap.YES))
   end
 
   if bottom_area then
-    -- Skip image_show if the same image is already on screen at the same
-    -- area. This prevents flicker while scrolling through a section that
-    -- maps to one block.
-    local show_key = string.format("%s|%dx%d|%s", cache_path, bottom_area.w, bottom_area.h, mode)
-    if read_shown_state(path) ~= show_key then
-      local delay = (rt and rt.preview and rt.preview.image_delay or 0) / 1000
-      ya.sleep(math.max(0, delay + start - os.clock()))
-      ya.image_show(Url(cache_path), bottom_area)
-      write_shown_state(path, show_key)
-    end
+    -- Re-emit image_show every peek so the preview cannot get stuck on a
+    -- stale or blank image (see Codex review MUST #1). Flicker is absorbed
+    -- by ya.sleep below, matching the built-in image previewer.
+    local delay = (rt and rt.preview and rt.preview.image_delay or 0) / 1000
+    ya.sleep(math.max(0, delay + start - os.clock()))
+    ya.image_show(Url(cache_path), bottom_area)
   end
 end
 
@@ -539,10 +594,25 @@ function M:peek(job)
   if not f then
     return message(job, "mermaid.yazi: cannot open file (" .. tostring(open_err) .. ")")
   end
-  local content = f:read(8 * 1024 * 1024) -- 8MB; some design docs exceed 4MB once embedded assets accumulate
+  -- 8 MB limit. Read one byte past the cap so we can detect (and warn
+  -- on) silent truncation (Codex review MUST #2). If a doc is larger
+  -- than this, mermaid blocks after the cap would be invisible and the
+  -- glow cache would never invalidate on later edits — so we bail out
+  -- with a visible message instead of pretending the slice is the file.
+  local READ_LIMIT = 8 * 1024 * 1024
+  local content = f:read(READ_LIMIT + 1)
   f:close()
   if not content then
     return message(job, "mermaid.yazi: empty file")
+  end
+  if #content > READ_LIMIT then
+    return message(
+      job,
+      string.format(
+        "mermaid.yazi: file exceeds %d MB; preview disabled. Open it externally to render mermaid blocks.",
+        READ_LIMIT // (1024 * 1024)
+      )
+    )
   end
 
   local ext = path:match("%.([^%.]+)$")
