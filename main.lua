@@ -289,36 +289,9 @@ local function spawn_glow(width, path)
     :output()
 end
 
-local function try_glow_fallback(job)
-  local path = tostring(job.file.url)
-  if not path:match("%.md$") then
-    return false
-  end
-  local output = spawn_glow(job.area.w, path)
-  if not output or not output.status or not output.status.success then
-    return false
-  end
-
-  -- Slice glow output by skip so long, mermaid-less docs scroll.
-  local text = output.stdout or ""
-  local lines = {}
-  for line in (text .. "\n"):gmatch("(.-)\n") do
-    lines[#lines + 1] = line
-  end
-  local total = #lines
-  local skip = math.max(0, math.min(job.skip or 0, math.max(0, total - 1)))
-  local last = math.min(total, skip + job.area.h)
-  local visible = {}
-  for i = skip + 1, last do
-    visible[#visible + 1] = lines[i]
-  end
-
-  ya.preview_widget(
-    job,
-    ui.Text.parse(table.concat(visible, "\n")):area(job.area):wrap(ui.Wrap.YES)
-  )
-  return true
-end
+-- try_glow_fallback is defined after cached_glow_render so it can reuse the
+-- on-disk ANSI cache. See below near the end of the helper block.
+local try_glow_fallback
 
 local function render_image_full(job, source)
   local cache_path = cache.path(source, { ext = "png" })
@@ -483,6 +456,48 @@ local function cached_glow_render(content, width, path)
     os.rename(tmp_file, cache_file)
   end
   return text
+end
+
+-- Defined here (after cached_glow_render) so it can reuse the on-disk
+-- ANSI cache. Forward-declared near the top of the helper block.
+function try_glow_fallback(job, content)
+  local path = tostring(job.file.url)
+  if not path:match("%.md$") then
+    return false
+  end
+
+  -- Reuse the on-disk glow ANSI cache keyed on path + size + content +
+  -- width. Without this, scrolling through a mermaid-less .md re-spawned
+  -- glow on every peek tick — that's the main reason long design docs
+  -- felt sluggish even though the rest of the pipeline was idle.
+  local text = cached_glow_render(content or "", job.area.w, path)
+  if not text or text == "" then
+    return false
+  end
+
+  local lines = {}
+  for line in (text .. "\n"):gmatch("(.-)\n") do
+    lines[#lines + 1] = line
+  end
+  local total = #lines
+  local raw_skip = math.max(0, job.skip or 0)
+  local skip = math.max(0, math.min(raw_skip, math.max(0, total - 1)))
+  if skip ~= raw_skip then
+    -- Push the clamped skip back to yazi so further scrolls start from
+    -- the in-range position instead of being stuck past the end.
+    ya.emit("peek", { skip, only_if = job.file.url, upper_bound = true })
+  end
+  local last = math.min(total, skip + job.area.h)
+  local visible = {}
+  for i = skip + 1, last do
+    visible[#visible + 1] = lines[i]
+  end
+
+  ya.preview_widget(
+    job,
+    ui.Text.parse(table.concat(visible, "\n")):area(job.area):wrap(ui.Wrap.YES)
+  )
+  return true
 end
 
 local function render_md_composed(job, path, content, blocks)
@@ -655,7 +670,7 @@ function M:peek(job)
   if ext == "md" then
     local blocks = parser.extract_mermaid_blocks(content)
     if #blocks == 0 then
-      if try_glow_fallback(job) then
+      if try_glow_fallback(job, content) then
         return
       end
       return message(job, "mermaid.yazi: no mermaid blocks found")
