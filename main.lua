@@ -216,23 +216,63 @@ local function ensure_cached(cache_path, source)
     format = config.format,
     endpoint = config.endpoint,
   })
+  -- Deliberately omit `-f`. With `-f`, curl swallows the response body on
+  -- 4xx/5xx and we only get a generic stderr message; mermaid.ink replies
+  -- with a JSON body that says what's wrong with the diagram. Capture the
+  -- HTTP code via `-w` so we still know success vs. failure.
   local output, err = Command("curl")
-    :arg({ "-fsSL", "--max-time", tostring(config.timeout), "-o", cache_path, image_url })
+    :arg({
+      "-sSL",
+      "--max-time",
+      tostring(config.timeout),
+      "-o",
+      cache_path,
+      "-w",
+      "%{http_code}",
+      image_url,
+    })
+    :stdout(Command.PIPED)
     :stderr(Command.PIPED)
     :output()
   if err then
     return false, "curl spawn error: " .. tostring(err)
   end
-  if not output or not output.status or not output.status.success then
-    local detail = output and output.stderr and trim(output.stderr) or ""
-    if #detail == 0 then
-      detail = "no stderr output"
-    elseif #detail > 200 then
-      detail = detail:sub(1, 200) .. "..."
-    end
-    return false, "fetch failed (" .. detail .. ")"
+  local http_code = output and output.stdout and trim(output.stdout) or ""
+  if http_code == "200" then
+    return true, nil
   end
-  return true, nil
+
+  -- Non-200: cache_path holds the error body, not an image. Read it,
+  -- extract mermaid.ink's JSON `error` / `message` field if present, and
+  -- delete the file so we don't keep a corrupt "image" in cache.
+  local body = ""
+  local rf = io.open(cache_path, "r")
+  if rf then
+    body = rf:read("*all") or ""
+    rf:close()
+  end
+  os.remove(cache_path)
+
+  local detail = body:match('"error"%s*:%s*"([^"]+)"') or body:match('"message"%s*:%s*"([^"]+)"')
+  if not detail or detail == "" then
+    detail = trim(body):sub(1, 200)
+    if detail == "" then
+      if output and output.stderr then
+        local err_text = trim(output.stderr)
+        if err_text ~= "" then
+          detail = err_text:sub(1, 200)
+        end
+      end
+    end
+    if detail == "" then
+      detail = http_code ~= "" and ("HTTP " .. http_code) or "no response body"
+    end
+  end
+  if #detail > 200 then
+    detail = detail:sub(1, 200) .. "..."
+  end
+  local prefix = http_code ~= "" and http_code ~= "0" and ("HTTP " .. http_code .. ": ") or ""
+  return false, "mermaid.ink: " .. prefix .. detail
 end
 
 local function file_size_or_zero(path)
