@@ -38,7 +38,9 @@ end
 function M.image_url(source, opts)
   opts = opts or {}
   local path = opts.format == "svg" and "svg" or "img"
-  return "https://mermaid.ink/" .. path .. "/" .. M.base64url(source)
+  local endpoint = opts.endpoint or "https://mermaid.ink"
+  endpoint = endpoint:gsub("/+$", "")
+  return endpoint .. "/" .. path .. "/" .. M.base64url(source)
 end
 
 return M

@@ -97,6 +97,31 @@ Use yazi's standard preview-scroll keys (`Shift+J` / `Shift+K`, `<C-d>` / `<C-u>
 
 In `split` mode the bottom mermaid image **auto-selects** whichever block falls inside the visible window. The caption carries a `~` to indicate that the selection is approximate — glow's decorated and wrapped output rows don't always line up exactly with raw md line numbers.
 
+## Configuration
+
+The plugin accepts user overrides through `M:setup(opts)`. Add the call to `~/.config/yazi/init.lua`:
+
+```lua
+require("mermaid"):setup({
+  -- All keys are optional; defaults shown.
+  format = "png",                   -- "png" | "svg"
+  endpoint = "https://mermaid.ink", -- HTTP base (kroki / self-hosted work too)
+  timeout = 10,                     -- curl --max-time, seconds
+  glow_timeout = 15,                -- wall-clock cap on glow, seconds
+  image_rows = nil,                 -- nil = follow zoom step; integer = fixed rows
+  read_limit_mb = 8,                -- ceiling on io.read
+})
+```
+
+| key | type | default | what it changes |
+|---|---|---|---|
+| `format` | `"png"` / `"svg"` | `"png"` | mermaid.ink output format. SVG needs a yazi build with resvg; PNG is the safer default |
+| `endpoint` | string | `"https://mermaid.ink"` | HTTP base. Point this at a self-hosted [kroki](https://kroki.io) for offline-ish workflows; trailing slashes are stripped |
+| `timeout` | seconds | `10` | curl `--max-time` cap for image fetches |
+| `glow_timeout` | seconds | `15` | wall-clock cap for `glow`. Only active when `gtimeout` (macOS via coreutils) or `timeout` (Linux) is on `PATH` |
+| `image_rows` | integer or `nil` | `nil` | when set, pins the image area height. The `zoom-in` / `zoom-out` keymap entries override this once they've written to the persisted zoom step |
+| `read_limit_mb` | integer | `8` | maximum file size we read. Markdown bigger than this surfaces `file exceeds N MB` and the preview is disabled — mermaid blocks past the cap would be invisible to the parser |
+
 ## Error reference
 
 The plugin surfaces these messages in the preview pane when something goes wrong:

@@ -12,9 +12,22 @@
 
 local M = {}
 
+-- Default config. M:setup(opts) merges user overrides on top of these.
+-- Keep keys flat (no nesting) so init.lua snippets stay concise:
+--
+--   require("mermaid"):setup({
+--     format = "svg",
+--     endpoint = "https://my-kroki.example.com",
+--     timeout = 30,
+--     image_rows = 16,
+--   })
 local config = {
-  format = "png",
-  timeout = 10,
+  format = "png", -- "png" | "svg" — passed through to mermaid.ink path
+  endpoint = "https://mermaid.ink", -- HTTP base; works with kroki or self-hosted
+  timeout = 10, -- curl --max-time, seconds
+  glow_timeout = 15, -- wall-clock cap for the wrapped glow invocation, seconds
+  image_rows = nil, -- nil = use default step; otherwise an integer step (the zoom_in/out state file overrides this)
+  read_limit_mb = 8, -- io.read cap; files bigger than this surface an explicit error
 }
 
 -- ==========================================
@@ -112,7 +125,9 @@ do
   function e.image_url(source, opts)
     opts = opts or {}
     local path = opts.format == "svg" and "svg" or "img"
-    return "https://mermaid.ink/" .. path .. "/" .. e.base64url(source)
+    local endpoint = opts.endpoint or "https://mermaid.ink"
+    endpoint = endpoint:gsub("/+$", "")
+    return endpoint .. "/" .. path .. "/" .. e.base64url(source)
   end
 
   encoder = e
@@ -197,7 +212,10 @@ local function ensure_cached(cache_path, source)
   if file_exists(cache_path) then
     return true, nil
   end
-  local image_url = encoder.image_url(source, { format = config.format })
+  local image_url = encoder.image_url(source, {
+    format = config.format,
+    endpoint = config.endpoint,
+  })
   local output, err = Command("curl")
     :arg({ "-fsSL", "--max-time", tostring(config.timeout), "-o", cache_path, image_url })
     :stderr(Command.PIPED)
@@ -268,7 +286,10 @@ local function detect_timeout_cmd()
   return picked
 end
 
-local GLOW_TIMEOUT_SEC = "15"
+-- Resolved at call time so M:setup(opts) takes effect without a reload.
+local function glow_timeout_arg()
+  return tostring(config.glow_timeout or 15)
+end
 
 -- Run glow with a hard wall-clock cap so a hung glow doesn't freeze the
 -- preview pipeline (Codex review SHOULD #4). Returns the output table the
@@ -277,7 +298,7 @@ local function spawn_glow(width, path)
   local timeout_cmd = detect_timeout_cmd()
   if timeout_cmd then
     return Command(timeout_cmd)
-      :arg({ GLOW_TIMEOUT_SEC, "glow", "--style", "dark", "--width", tostring(width), path })
+      :arg({ glow_timeout_arg(), "glow", "--style", "dark", "--width", tostring(width), path })
       :stdout(Command.PIPED)
       :stderr(Command.PIPED)
       :output()
@@ -515,7 +536,10 @@ local function render_md_composed(job, path, content, blocks)
     bottom_area = nil
   else
     -- Split (default).
-    local image_rows = ROW_STEPS[get_row_step()] or A3_IMAGE_ROWS_MAX
+    -- Resolution order: explicit user setup -> persisted zoom step -> fallback max.
+    -- The zoom_in/out keymap entries write into the row step file, so once a
+    -- session has zoomed, that takes precedence over the static setup value.
+    local image_rows = config.image_rows or ROW_STEPS[get_row_step()] or A3_IMAGE_ROWS_MAX
     -- Don't let the image push the text completely out of view.
     local cap = math.max(1, math.floor(job.area.h * 0.7))
     if image_rows > cap then
@@ -645,7 +669,7 @@ function M:peek(job)
   -- than this, mermaid blocks after the cap would be invisible and the
   -- glow cache would never invalidate on later edits — so we bail out
   -- with a visible message instead of pretending the slice is the file.
-  local READ_LIMIT = 8 * 1024 * 1024
+  local READ_LIMIT = math.max(1, config.read_limit_mb or 8) * 1024 * 1024
   local content = f:read(READ_LIMIT + 1)
   f:close()
   if not content then
