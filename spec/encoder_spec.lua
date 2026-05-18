@@ -48,4 +48,25 @@ describe("encoder.image_url", function()
       encoder.image_url("graph TD", { format = "weird" })
     )
   end)
+
+  it("uses opts.endpoint when provided (e.g. self-hosted kroki)", function()
+    assert.are.equal(
+      "https://kroki.io/img/Z3JhcGggVEQ",
+      encoder.image_url("graph TD", { endpoint = "https://kroki.io" })
+    )
+  end)
+
+  it("strips trailing slashes from endpoint", function()
+    assert.are.equal(
+      "https://mermaid.ink/img/Z3JhcGggVEQ",
+      encoder.image_url("graph TD", { endpoint = "https://mermaid.ink/" })
+    )
+  end)
+
+  it("combines custom endpoint with svg format", function()
+    assert.are.equal(
+      "https://kroki.io/svg/Z3JhcGggVEQ",
+      encoder.image_url("graph TD", { endpoint = "https://kroki.io", format = "svg" })
+    )
+  end)
 end)
