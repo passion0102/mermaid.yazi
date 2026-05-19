@@ -177,6 +177,20 @@ function M:setup(opts)
   end
 end
 
+-- Lightweight stopwatch for ya.dbg. ya.dbg is a no-op unless yazi is
+-- started with `YAZI_LOG=debug`, so plain runs pay nothing.
+local function timing(t0, label, extra)
+  if not ya.dbg then
+    return
+  end
+  local ms = (os.clock() - t0) * 1000
+  if extra then
+    ya.dbg(string.format("[mermaid.yazi:perf] %-22s %7.2f ms  %s", label, ms, extra))
+  else
+    ya.dbg(string.format("[mermaid.yazi:perf] %-22s %7.2f ms", label, ms))
+  end
+end
+
 local function message(job, text)
   ya.preview_widget(job, ui.Text.parse(text):area(job.area):wrap(ui.Wrap.YES))
 end
@@ -209,7 +223,9 @@ local function trim(s)
 end
 
 local function ensure_cached(cache_path, source)
+  local t_total = os.clock()
   if file_exists(cache_path) then
+    timing(t_total, "image.cache-hit")
     return true, nil
   end
   local image_url = encoder.image_url(source, {
@@ -239,6 +255,7 @@ local function ensure_cached(cache_path, source)
   end
   local http_code = output and output.stdout and trim(output.stdout) or ""
   if http_code == "200" then
+    timing(t_total, "image.curl-200")
     return true, nil
   end
 
@@ -272,6 +289,7 @@ local function ensure_cached(cache_path, source)
     detail = detail:sub(1, 200) .. "..."
   end
   local prefix = http_code ~= "" and http_code ~= "0" and ("HTTP " .. http_code .. ": ") or ""
+  timing(t_total, "image.curl-fail", "http=" .. http_code)
   return false, "mermaid.ink: " .. prefix .. detail
 end
 
@@ -360,7 +378,9 @@ local function render_image_full(job, source)
   if not ok then
     return message(job, "mermaid.yazi: " .. tostring(err))
   end
+  local t_show = os.clock()
   local _, show_err = ya.image_show(Url(cache_path), job.area)
+  timing(t_show, "image-show.full")
   if show_err then
     return message(job, "mermaid.yazi: " .. tostring(show_err))
   end
@@ -474,6 +494,7 @@ end
 -- a unique tmp file + rename so a concurrent peek never reads a half-
 -- written ANSI cache (Codex MUST #3).
 local function cached_glow_render(content, width, path)
+  local t_total = os.clock()
   local size = file_size_or_zero(path)
   local key_input = path .. "::" .. tostring(size) .. "::" .. content .. "::" .. tostring(width)
   local hash
@@ -493,16 +514,20 @@ local function cached_glow_render(content, width, path)
     local text = f:read("*all")
     f:close()
     if text and #text > 0 then
+      timing(t_total, "glow.cache-hit", string.format("bytes=%d", #text))
       return text
     end
   end
 
+  local t_spawn = os.clock()
   local out = spawn_glow(width, path)
+  timing(t_spawn, "glow.spawn", path)
   if not out or not out.status or not out.status.success then
     -- Failure: do NOT cache (Codex 2nd review SHOULD #4). A timeout or a
     -- partial stdout would otherwise stick as the "rendered" version for
     -- this content forever. Return a transient marker so the next peek
     -- retries glow instead of reading stale cache.
+    timing(t_total, "glow.cache-miss-fail")
     return "(glow failed or timed out — will retry on next peek)"
   end
   local text = out.stdout or ""
@@ -516,6 +541,7 @@ local function cached_glow_render(content, width, path)
     wf:close()
     os.rename(tmp_file, cache_file)
   end
+  timing(t_total, "glow.cache-miss", string.format("bytes=%d", #text))
   return text
 end
 
@@ -659,9 +685,14 @@ local function render_md_composed(job, path, content, blocks)
     -- stale or blank image (see Codex review MUST #1). Flicker is absorbed
     -- by ya.sleep below, matching the built-in image previewer.
     local delay = (rt and rt.preview and rt.preview.image_delay or 0) / 1000
+    local t_sleep = os.clock()
     ya.sleep(math.max(0, delay + start - os.clock()))
+    timing(t_sleep, "image-show.sleep")
+    local t_show = os.clock()
     ya.image_show(Url(cache_path), bottom_area)
+    timing(t_show, "image-show.composed")
   end
+  timing(start, "render_md_composed.total")
 end
 
 -- Plugin entry: invoked by `plugin mermaid -- <subcommand>` from yazi
@@ -699,6 +730,7 @@ function M:entry(job)
 end
 
 function M:peek(job)
+  local t_peek = os.clock()
   local path = tostring(job.file.url)
   local f, open_err = io.open(path, "r")
   if not f then
@@ -712,6 +744,11 @@ function M:peek(job)
   local READ_LIMIT = math.max(1, config.read_limit_mb or 8) * 1024 * 1024
   local content = f:read(READ_LIMIT + 1)
   f:close()
+  timing(
+    t_peek,
+    "peek.file-read",
+    string.format("bytes=%d skip=%d", content and #content or 0, job.skip or 0)
+  )
   if not content then
     return message(job, "mermaid.yazi: empty file")
   end
@@ -728,20 +765,29 @@ function M:peek(job)
   local ext = path:match("%.([^%.]+)$")
 
   if ext == "mmd" or ext == "mermaid" then
-    return render_image_full(job, content)
+    render_image_full(job, content)
+    timing(t_peek, "peek.total", "ext=" .. ext)
+    return
   end
 
   if ext == "md" then
+    local t_parse = os.clock()
     local blocks = parser.extract_mermaid_blocks(content)
+    timing(t_parse, "peek.parse", string.format("blocks=%d", #blocks))
     if #blocks == 0 then
       if try_glow_fallback(job, content) then
+        timing(t_peek, "peek.total", "ext=md path=glow-fallback")
         return
       end
+      timing(t_peek, "peek.total", "ext=md path=no-mermaid")
       return message(job, "mermaid.yazi: no mermaid blocks found")
     end
-    return render_md_composed(job, path, content, blocks)
+    render_md_composed(job, path, content, blocks)
+    timing(t_peek, "peek.total", "ext=md path=composed")
+    return
   end
 
+  timing(t_peek, "peek.total", "ext=unsupported")
   return message(job, "mermaid.yazi: unsupported extension")
 end
 
