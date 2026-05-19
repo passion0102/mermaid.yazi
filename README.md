@@ -33,11 +33,32 @@ Optional but recommended:
 
 ## Installation
 
+### Via `ya pkg add` (default)
+
 ```sh
 ya pkg add passion0102/mermaid
 ```
 
-Then in `~/.config/yazi/yazi.toml`:
+This clones the entire repository into `~/.config/yazi/plugins/mermaid.yazi/`, including the `lib/` sources and `spec/` tests used for development. yazi only ever loads `main.lua`, so the extra files are harmless but cost a few hundred kilobytes of disk.
+
+### Manual install from release tarball (lightweight)
+
+For environments that prefer not to pull dev sources (CI images, locked-down workstations, install scripts), grab a release tarball:
+
+```sh
+# Replace v0.1.0 with the latest tag from
+# https://github.com/passion0102/mermaid.yazi/releases
+version="v0.1.0"
+mkdir -p ~/.config/yazi/plugins
+curl -sSL "https://github.com/passion0102/mermaid.yazi/releases/download/${version}/mermaid.yazi-${version}.tar.gz" \
+  | tar -xz -C ~/.config/yazi/plugins
+```
+
+The tarball contains only `main.lua`, `README.md`, and `LICENSE` inside a `mermaid.yazi/` directory. The release workflow ([.github/workflows/release.yml](./.github/workflows/release.yml)) builds it automatically on every `v*` tag push.
+
+### yazi configuration
+
+After either install path, add to `~/.config/yazi/yazi.toml`:
 
 ```toml
 [plugin]
