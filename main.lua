@@ -28,6 +28,7 @@ local config = {
   glow_timeout = 15, -- wall-clock cap for the wrapped glow invocation, seconds
   image_rows = nil, -- nil = use default step; otherwise an integer step (the zoom_in/out state file overrides this)
   read_limit_mb = 8, -- io.read cap; files bigger than this surface an explicit error
+  backend = "auto", -- "auto" | "mermaid.ink" | "mmdc". auto picks mmdc when on PATH, else mermaid.ink
 }
 
 -- ==========================================
@@ -222,12 +223,95 @@ local function trim(s)
   return (s:gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
+-- Detect mmdc (mermaid-cli) once and cache the positive result. Mirror the
+-- detect_timeout_cmd pattern: negative results are NOT cached so installing
+-- mmdc later takes effect on the next peek without a manual cache wipe.
+local function has_mmdc()
+  local cache_path = "/tmp/mermaid-yazi-mmdc-detect"
+  local cached = io.open(cache_path, "r")
+  if cached then
+    local v = (cached:read("*all") or ""):gsub("%s+", "")
+    cached:close()
+    if v == "yes" then
+      return true
+    end
+  end
+  local out = Command("sh"):arg({ "-c", "command -v mmdc" }):stdout(Command.PIPED):output()
+  local ok = out and out.status and out.status.success
+  if ok then
+    local wf = io.open(cache_path, "w")
+    if wf then
+      wf:write("yes")
+      wf:close()
+    end
+    return true
+  end
+  return false
+end
+
+-- Resolve the user-facing config.backend ("auto" | "mermaid.ink" | "mmdc")
+-- to an effective backend string.
+local function resolve_backend()
+  local b = config.backend or "auto"
+  if b == "mmdc" or b == "mermaid.ink" then
+    return b
+  end
+  if has_mmdc() then
+    return "mmdc"
+  end
+  return "mermaid.ink"
+end
+
+-- Run mmdc to render `source` directly to `output_path`. mmdc reads the
+-- mermaid source from a file, so we write a temp .mmd next to the cache
+-- file, run mmdc, then delete the temp.
+local function spawn_mmdc(source, output_path)
+  local input_path = output_path .. ".src.mmd"
+  local f = io.open(input_path, "w")
+  if not f then
+    return false, "cannot write mermaid source for mmdc"
+  end
+  f:write(source)
+  f:close()
+
+  local output, err = Command("mmdc")
+    :arg({ "-i", input_path, "-o", output_path, "--quiet" })
+    :stderr(Command.PIPED)
+    :output()
+  os.remove(input_path)
+
+  if err then
+    return false, "mmdc spawn error: " .. tostring(err)
+  end
+  if not output or not output.status or not output.status.success then
+    local detail = (output and output.stderr) and trim(output.stderr) or "unknown error"
+    if #detail > 200 then
+      detail = detail:sub(1, 200) .. "..."
+    end
+    return false, "mmdc failed: " .. detail
+  end
+  return true, nil
+end
+
 local function ensure_cached(cache_path, source)
   local t_total = os.clock()
   if file_exists(cache_path) then
     timing(t_total, "image.cache-hit")
     return true, nil
   end
+
+  local backend = resolve_backend()
+  if backend == "mmdc" then
+    local t_mmdc = os.clock()
+    local ok, err = spawn_mmdc(source, cache_path)
+    timing(t_mmdc, "image.mmdc", ok and "ok" or "fail")
+    if not ok then
+      return false, tostring(err)
+    end
+    return true, nil
+  end
+
+  -- mermaid.ink path
   local image_url = encoder.image_url(source, {
     format = config.format,
     endpoint = config.endpoint,

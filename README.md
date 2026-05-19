@@ -125,6 +125,7 @@ The plugin accepts user overrides through `M:setup(opts)`. Add the call to `~/.c
 ```lua
 require("mermaid"):setup({
   -- All keys are optional; defaults shown.
+  backend = "auto",                 -- "auto" | "mermaid.ink" | "mmdc"
   format = "png",                   -- "png" | "svg"
   endpoint = "https://mermaid.ink", -- HTTP base (kroki / self-hosted work too)
   timeout = 10,                     -- curl --max-time, seconds
@@ -136,12 +137,28 @@ require("mermaid"):setup({
 
 | key | type | default | what it changes |
 |---|---|---|---|
-| `format` | `"png"` / `"svg"` | `"png"` | mermaid.ink output format. SVG needs a yazi build with resvg; PNG is the safer default |
-| `endpoint` | string | `"https://mermaid.ink"` | HTTP base. Point this at a self-hosted [kroki](https://kroki.io) for offline-ish workflows; trailing slashes are stripped |
-| `timeout` | seconds | `10` | curl `--max-time` cap for image fetches |
+| `backend` | `"auto"` / `"mermaid.ink"` / `"mmdc"` | `"auto"` | Image rendering backend. `auto` picks [`mmdc`](https://github.com/mermaid-js/mermaid-cli) when it's on `PATH`, otherwise falls back to the HTTP `endpoint`. Force `"mmdc"` for offline / locked-down networks; force `"mermaid.ink"` to keep the HTTP path even when `mmdc` is installed |
+| `format` | `"png"` / `"svg"` | `"png"` | Output format. SVG needs a yazi build with resvg; PNG is the safer default |
+| `endpoint` | string | `"https://mermaid.ink"` | HTTP base used when the resolved backend is `mermaid.ink`. Point this at a self-hosted [kroki](https://kroki.io) for an in-network HTTP path; trailing slashes are stripped |
+| `timeout` | seconds | `10` | curl `--max-time` cap for image fetches (mermaid.ink path only) |
 | `glow_timeout` | seconds | `15` | wall-clock cap for `glow`. Only active when `gtimeout` (macOS via coreutils) or `timeout` (Linux) is on `PATH` |
 | `image_rows` | integer or `nil` | `nil` | when set, pins the image area height. The `zoom-in` / `zoom-out` keymap entries override this once they've written to the persisted zoom step |
 | `read_limit_mb` | integer | `8` | maximum file size we read. Markdown bigger than this surfaces `file exceeds N MB` and the preview is disabled — mermaid blocks past the cap would be invisible to the parser |
+
+### Offline / air-gapped install
+
+If you can't reach `mermaid.ink`, install [`mermaid-cli`](https://github.com/mermaid-js/mermaid-cli) and force the `mmdc` backend:
+
+```sh
+# One-time install (requires npm and Chromium for Playwright)
+npm install -g @mermaid-js/mermaid-cli
+```
+
+```lua
+require("mermaid"):setup({ backend = "mmdc" })
+```
+
+`mmdc` renders each block to disk directly — no HTTP, no `mermaid.ink` dependency. Tradeoff: the first render in a session spawns a fresh Chromium and can take a couple of seconds; subsequent peeks hit the cache.
 
 ## Error reference
 
