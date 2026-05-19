@@ -5,6 +5,8 @@
 
 A [yazi](https://github.com/sxyazi/yazi) plugin that renders [Mermaid](https://mermaid.js.org/) diagrams alongside Markdown previews — for terminals with image protocol support (Ghostty, Kitty, WezTerm, iTerm2).
 
+![mermaid.yazi previewing a markdown file: glow-rendered text on top, mermaid sequence diagram at the bottom](./docs/demo.png)
+
 ## Why
 
 `glow`, `mdcat`, and friends render Markdown beautifully in the terminal, but `mermaid` code blocks are passed through as raw text. This plugin extracts those blocks, sends them to [mermaid.ink](https://mermaid.ink) for rendering, and displays the resulting images alongside the text in the preview pane.

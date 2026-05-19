@@ -1,6 +1,9 @@
 .DS_Store
 .luarocks/
 .busted_cache/
-*.png
-*.svg
 node_modules/
+
+# Note: we used to ignore *.png / *.svg here to keep mermaid render
+# caches out of the index. Those live in /tmp/mermaid-yazi-* and never
+# touch the repo, but the broad pattern also blocked docs/*.png — so
+# the entries were dropped.
