@@ -1,0 +1,41 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build ship-only tarball
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build tarball
+        id: build
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME}"
+          stage="dist/mermaid.yazi"
+          mkdir -p "${stage}"
+          cp main.lua README.md LICENSE "${stage}/"
+          asset="mermaid.yazi-${version}.tar.gz"
+          tar -czf "${asset}" -C dist mermaid.yazi
+          echo "asset=${asset}" >> "${GITHUB_OUTPUT}"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          ls -la "${asset}"
+          tar -tzf "${asset}"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release create "${{ steps.build.outputs.version }}" \
+            --title "${{ steps.build.outputs.version }}" \
+            --notes "Automated lightweight tarball (main.lua + README + LICENSE only). Useful for installs that don't want the dev/test sources \`ya pkg add\` would pull in." \
+            "${{ steps.build.outputs.asset }}"
