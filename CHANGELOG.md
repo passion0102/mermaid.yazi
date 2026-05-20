@@ -7,17 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-05-20
+
+This release polishes the project's contributor and reader surface to match the look and feel of established terminal-OSS repos. No runtime behavior changes from `0.2.0`.
+
 ### Added
 
-- `CONTRIBUTING.md` documenting toolchain setup, code layout, testing, lint/format, commit conventions, PR flow, and release procedure.
-- Issue templates (`.github/ISSUE_TEMPLATE/bug.yml`, `feature.yml`) and `config.yml` that disables blank issues and points yazi-core problems upstream.
-- `.github/PULL_REQUEST_TEMPLATE.md` with Summary / Changes / Test plan / Related sections.
+- `CONTRIBUTING.md` documenting toolchain setup, code layout, testing, lint/format, commit conventions, PR flow, and release procedure. ([#19](https://github.com/passion0102/mermaid.yazi/pull/19))
+- Issue templates (`.github/ISSUE_TEMPLATE/bug.yml`, `feature.yml`) and a `config.yml` that disables blank issues and points yazi-core problems upstream. ([#19](https://github.com/passion0102/mermaid.yazi/pull/19))
+- `.github/PULL_REQUEST_TEMPLATE.md` with Summary / Changes / Test plan / Related sections. ([#19](https://github.com/passion0102/mermaid.yazi/pull/19))
+- `CHANGELOG.md` (this file) lands so future releases have a stable place to document changes. ([#18](https://github.com/passion0102/mermaid.yazi/pull/18))
 
 ### Changed
 
-- `CHANGELOG.md` (this file) lands so future releases have a stable place to document changes. ([#18](https://github.com/passion0102/mermaid.yazi/pull/18))
 - Resized the README demo image (`docs/demo.png`) to half resolution so it stops dominating the github.com page. ([#16](https://github.com/passion0102/mermaid.yazi/pull/16))
 - Polished the README to match the look of more established terminal-OSS docs: centered hero block with badges + screenshot, `✨ Features` bullet list, table of contents, additional badges (Latest Release, GitHub Stars). ([#17](https://github.com/passion0102/mermaid.yazi/pull/17))
+- Repo metadata: added `yazi-plugin`, `yazi`, `mermaid`, `mermaid-diagrams`, `markdown`, `markdown-preview`, `previewer`, `lua` topics for discoverability.
 
 ## [0.2.0] — 2026-05-19
 
@@ -55,6 +60,7 @@ First tagged release. The release workflow builds a ship-only tarball (`main.lua
 - Cached `glow` output now keys on path + file size + content + width so changes past the read cap still bust the cache, and bigger-than-8 MB files surface an explicit `file exceeds N MB` message instead of silently truncating. ([#2](https://github.com/passion0102/mermaid.yazi/pull/2))
 - `glow` invocations are wrapped with `gtimeout` / `timeout` when available so a wedged process can't freeze the preview pipeline. ([#2](https://github.com/passion0102/mermaid.yazi/pull/2))
 
-[Unreleased]: https://github.com/passion0102/mermaid.yazi/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/passion0102/mermaid.yazi/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/passion0102/mermaid.yazi/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/passion0102/mermaid.yazi/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/passion0102/mermaid.yazi/releases/tag/v0.1.0
