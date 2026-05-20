@@ -38,6 +38,8 @@ A [yazi](https://github.com/sxyazi/yazi) plugin that renders [Mermaid](https://m
 - [Development](#development)
 - [License](#license)
 
+> Looking for what changed between releases? See [CHANGELOG.md](./CHANGELOG.md).
+
 ## Why
 
 `glow`, `mdcat`, and friends render Markdown beautifully in the terminal, but `mermaid` code blocks are passed through as raw text. This plugin extracts those blocks, sends them to [mermaid.ink](https://mermaid.ink) for rendering, and displays the resulting images alongside the text in the preview pane.
