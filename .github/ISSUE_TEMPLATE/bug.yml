@@ -1,0 +1,68 @@
+name: 🐞 Bug Report
+description: Report a defect in mermaid.yazi
+labels: [bug]
+body:
+  - type: textarea
+    id: yazi-debug
+    attributes:
+      label: "`yazi --debug` output"
+      description: Run `yazi --debug` in your terminal and paste the entire output here.
+      render: Shell
+    validations:
+      required: true
+
+  - type: input
+    id: plugin-version
+    attributes:
+      label: mermaid.yazi version / commit
+      description: Tag (e.g. `v0.2.0`) or the short hash from `git -C ~/.config/yazi/plugins/mermaid.yazi log -1 --oneline`.
+      placeholder: v0.2.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: The smallest set of steps that reproduces the issue. Attach the input `.md` / `.mmd` if you can.
+      placeholder: |
+        1. `yazi ~/path/to/dir`
+        2. Hover over `example.md`
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: |
+        Include the message shown in the preview pane (if any) and the
+        relevant entries from `~/.local/state/yazi/yazi.log` — especially
+        lines prefixed with `[mermaid.yazi:perf]` or `ERROR
+        yazi_plugin::isolate::peek`.
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Terminal emulator, image protocol, anything else you suspect is relevant.
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues for duplicates.
+          required: true
+        - label: I am on the latest release or on `main`.
+          required: true

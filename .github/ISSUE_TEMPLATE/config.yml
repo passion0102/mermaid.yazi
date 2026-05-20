@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: yazi upstream
+    url: https://github.com/sxyazi/yazi/issues
+    about: |
+      For yazi core problems (not specific to mermaid.yazi), file the
+      issue upstream. mermaid.yazi tracks the upstream items it depends
+      on — see sxyazi/yazi#3982 for the open umbrella thread.
