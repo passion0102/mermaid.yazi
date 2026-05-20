@@ -1,11 +1,42 @@
 # mermaid.yazi
 
-[![CI](https://github.com/passion0102/mermaid.yazi/actions/workflows/ci.yml/badge.svg)](https://github.com/passion0102/mermaid.yazi/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+> 🧜‍♀️ Mermaid diagrams. In [yazi](https://github.com/sxyazi/yazi). In your terminal.
+
+<p align="center">
+  <a href="https://github.com/passion0102/mermaid.yazi/actions/workflows/ci.yml"><img src="https://github.com/passion0102/mermaid.yazi/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+  <a href="https://github.com/passion0102/mermaid.yazi/releases/latest"><img src="https://img.shields.io/github/v/release/passion0102/mermaid.yazi?label=release&color=blue" alt="Latest Release"></a>
+  <a href="https://github.com/passion0102/mermaid.yazi/stargazers"><img src="https://img.shields.io/github/stars/passion0102/mermaid.yazi?style=social" alt="GitHub Stars"></a>
+</p>
+
+<p align="center">
+  <img src="./docs/demo.png" width="640" alt="mermaid.yazi previewing a markdown file: glow-rendered text on top, mermaid sequence diagram at the bottom">
+</p>
 
 A [yazi](https://github.com/sxyazi/yazi) plugin that renders [Mermaid](https://mermaid.js.org/) diagrams alongside Markdown previews — for terminals with image protocol support (Ghostty, Kitty, WezTerm, iTerm2).
 
-![mermaid.yazi previewing a markdown file: glow-rendered text on top, mermaid sequence diagram at the bottom](./docs/demo.png)
+## ✨ Features
+
+- 🎨 **Inline mermaid diagrams** — split-mode previewer composes glow-rendered text with a mermaid image right in the preview pane
+- 🌐 **Offline backend** — `mmdc` (mermaid-cli) support for air-gapped / locked-down networks
+- 🔄 **Mode toggle** — split / image-only / text-only via keymap
+- 🔎 **Image-area zoom** — 8 step sizes (6 → 40 rows)
+- ⚡️ **Snappy scrolling** — ANSI cache for glow + on-disk cache for mermaid images
+- 🛡️ **Useful errors** — surfaces mermaid.ink's JSON parse error verbatim instead of curl's generic stderr
+- 🛠 **Configurable** — `setup({...})` for format, endpoint, timeouts, default zoom, read limit
+- 🪶 **Light install option** — release tarball ships only `main.lua` + `README` + `LICENSE`
+
+## Contents
+
+- [Why](#why)
+- [Status](#status)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Operation](#operation)
+- [Configuration](#configuration)
+- [Error reference](#error-reference)
+- [Development](#development)
+- [License](#license)
 
 ## Why
 
@@ -20,7 +51,7 @@ A [yazi](https://github.com/sxyazi/yazi) plugin that renders [Mermaid](https://m
 | A3 — composite md text + mermaid image in one preview | ✅ (bottom-anchored split mode; see [#3](https://github.com/passion0102/mermaid.yazi/issues/3) for the abandoned inline-embedded R&D) |
 | Glow fallback for plain `.md` (no mermaid blocks) | ✅ |
 | Mode toggle (split / image / text) + image zoom | ✅ |
-| Offline `mmdc` backend, packaging bundle, demo gif | tracked in [#7](https://github.com/passion0102/mermaid.yazi/issues/7) |
+| Offline `mmdc` backend / release tarball / demo screenshot | ✅ (all shipped as of v0.2.0) |
 
 ## Requirements
 
