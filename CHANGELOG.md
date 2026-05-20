@@ -7,8 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `CONTRIBUTING.md` documenting toolchain setup, code layout, testing, lint/format, commit conventions, PR flow, and release procedure.
+- Issue templates (`.github/ISSUE_TEMPLATE/bug.yml`, `feature.yml`) and `config.yml` that disables blank issues and points yazi-core problems upstream.
+- `.github/PULL_REQUEST_TEMPLATE.md` with Summary / Changes / Test plan / Related sections.
+
 ### Changed
 
+- `CHANGELOG.md` (this file) lands so future releases have a stable place to document changes. ([#18](https://github.com/passion0102/mermaid.yazi/pull/18))
 - Resized the README demo image (`docs/demo.png`) to half resolution so it stops dominating the github.com page. ([#16](https://github.com/passion0102/mermaid.yazi/pull/16))
 - Polished the README to match the look of more established terminal-OSS docs: centered hero block with badges + screenshot, `✨ Features` bullet list, table of contents, additional badges (Latest Release, GitHub Stars). ([#17](https://github.com/passion0102/mermaid.yazi/pull/17))
 
