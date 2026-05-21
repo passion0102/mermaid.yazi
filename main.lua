@@ -164,6 +164,50 @@ do
     return dir .. "/mermaid-yazi-" .. tostring(key) .. "." .. ext
   end
 
+  function c._urandom_entropy()
+    local f = io.open("/dev/urandom", "rb")
+    if not f then
+      return nil
+    end
+    local bytes = f:read(4)
+    f:close()
+    if type(bytes) ~= "string" or #bytes < 4 then
+      return nil
+    end
+    local x = 0
+    for i = 1, 4 do
+      x = x * 256 + bytes:byte(i)
+    end
+    return string.format("%08x", x)
+  end
+
+  function c._vm_local_entropy()
+    local addr = tostring({}):match("0x(%w+)") or "0"
+    return string.format("%s.%f", addr, os.clock())
+  end
+
+  function c.tmp_path(final_path, opts)
+    if type(final_path) ~= "string" then
+      error("cache.tmp_path: final_path must be a string")
+    end
+    opts = opts or {}
+    local clock = opts.clock or function()
+      return os.time()
+    end
+    local random = opts.random or function()
+      return math.random(1, 2147483647)
+    end
+    local entropy = opts.entropy or c._urandom_entropy
+    local fallback = opts.fallback_entropy or c._vm_local_entropy
+    local t = clock()
+    local r = random()
+    local e = entropy()
+    if type(e) ~= "string" or #e == 0 then
+      e = fallback()
+    end
+    return string.format("%s.tmp.%d.%d.%s", final_path, t, r, e)
+  end
+
   cache = c
 end
 
@@ -616,14 +660,31 @@ local function cached_glow_render(content, width, path)
   end
   local text = out.stdout or ""
 
-  -- Atomic write: tmp file then rename. PID + time suffix to avoid two
-  -- peeks colliding on the same tmp name.
-  local tmp_file = string.format("%s.tmp.%d-%d", cache_file, os.time(), math.random(100000, 999999))
+  -- Atomic write: unique tmp file then rename. Suffix mixes os.time, math.random,
+  -- and 4 bytes from /dev/urandom so two peek isolates spawned in the same
+  -- second with a freshly seeded RNG cannot collide (issue #6).
+  local tmp_file = cache.tmp_path(cache_file)
   local wf = io.open(tmp_file, "w")
   if wf then
     wf:write(text)
     wf:close()
-    os.rename(tmp_file, cache_file)
+    local ok, rn_err, rn_code = os.rename(tmp_file, cache_file)
+    if not ok then
+      local removed, rm_err = os.remove(tmp_file)
+      timing(
+        t_total,
+        "glow.cache-miss-rename-failed",
+        string.format(
+          "bytes=%d rename_err=%s rename_code=%s remove_ok=%s remove_err=%s",
+          #text,
+          tostring(rn_err),
+          tostring(rn_code),
+          tostring(removed),
+          tostring(rm_err)
+        )
+      )
+      return text
+    end
   end
   timing(t_total, "glow.cache-miss", string.format("bytes=%d", #text))
   return text

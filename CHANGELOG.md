@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Glow cache atomic-rename now uses a tmp filename that mixes `os.time`, `math.random`, and four bytes from `/dev/urandom`, so two preview isolates spawned in the same second with a freshly seeded RNG can no longer collide on the same tmp inode. When `/dev/urandom` is unavailable the fallback entropy combines the Lua VM-local table address with `os.clock()` and does NOT share state with `math.random`, so the degraded path does not regress into the original collision. `cached_glow_render` also captures `os.rename` / `os.remove` errors into the timing log so failures are observable instead of silent. ([#6](https://github.com/passion0102/mermaid.yazi/issues/6))
+
+### Added
+
+- `cache.tmp_path(final_path, opts?)` and `cache._vm_local_entropy` in `lib/cache.lua` (mirrored in the bundled cache inside `main.lua`). `opts.clock` / `opts.random` / `opts.entropy` / `opts.fallback_entropy` are injectable so the helpers are fully unit-testable.
+- Bundle-parity specs that read `main.lua` and assert the bundled cache mirrors the new `lib/cache.lua` API, so future drift between the source-of-truth lib and the shipped bundle is caught in CI.
+
 ## [0.3.0] — 2026-05-20
 
 This release polishes the project's contributor and reader surface to match the look and feel of established terminal-OSS repos. No runtime behavior changes from `0.2.0`.
