@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Glow cache atomic-rename now uses a tmp filename that mixes `os.time`, `math.random`, and four bytes from `/dev/urandom`, so two preview isolates spawned in the same second with a freshly seeded RNG can no longer collide on the same tmp inode. `cached_glow_render` also checks the `os.rename` return value and cleans up the tmp file on failure instead of silently returning. ([#6](https://github.com/passion0102/mermaid.yazi/issues/6))
+
+### Added
+
+- `cache.tmp_path(final_path, opts?)` in `lib/cache.lua` (mirrored in the bundled cache inside `main.lua`). `opts.clock` / `opts.random` / `opts.entropy` are injectable so the helper is fully unit-testable.
+
 ## [0.3.0] — 2026-05-20
 
 This release polishes the project's contributor and reader surface to match the look and feel of established terminal-OSS repos. No runtime behavior changes from `0.2.0`.

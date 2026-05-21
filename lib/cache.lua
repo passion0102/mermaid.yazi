@@ -13,6 +13,55 @@ function M.path(content, opts)
   return dir .. "/mermaid-yazi-" .. tostring(key) .. "." .. ext
 end
 
+-- Build a unique tmp filename for atomic write-then-rename. Two yazi
+-- preview isolates that hit the same cache key in the same second with
+-- a freshly seeded RNG can otherwise collide; mixing in /dev/urandom
+-- bytes makes that practically impossible. opts is for tests:
+--   opts.clock   () -> number    (default: os.time)
+--   opts.random  () -> number    (default: math.random(1, 2^31 - 1))
+--   opts.entropy () -> string?   (default: M._urandom_entropy; nil means "fall back to random")
+function M.tmp_path(final_path, opts)
+  if type(final_path) ~= "string" then
+    error("cache.tmp_path: final_path must be a string")
+  end
+  opts = opts or {}
+  local clock = opts.clock or function()
+    return os.time()
+  end
+  local random = opts.random or function()
+    return math.random(1, 2147483647)
+  end
+  local entropy = opts.entropy or M._urandom_entropy
+
+  local t = clock()
+  local r = random()
+  local e = entropy()
+  if type(e) ~= "string" or #e == 0 then
+    e = string.format("%x", random())
+  end
+  return string.format("%s.tmp.%d.%d.%s", final_path, t, r, e)
+end
+
+-- Read 4 bytes from /dev/urandom and return them as a lowercase hex string.
+-- Returns nil if the device cannot be opened or short-reads, so callers can
+-- fall back to math.random.
+function M._urandom_entropy()
+  local f = io.open("/dev/urandom", "rb")
+  if not f then
+    return nil
+  end
+  local bytes = f:read(4)
+  f:close()
+  if type(bytes) ~= "string" or #bytes < 4 then
+    return nil
+  end
+  local x = 0
+  for i = 1, 4 do
+    x = x * 256 + bytes:byte(i)
+  end
+  return string.format("%08x", x)
+end
+
 function M._default_hash(s)
   if _G.ya and type(_G.ya.hash) == "function" then
     return _G.ya.hash(s)
