@@ -7,14 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-05-21
+
 ### Fixed
 
-- Glow cache atomic-rename now uses a tmp filename that mixes `os.time`, `math.random`, and four bytes from `/dev/urandom`, so two preview isolates spawned in the same second with a freshly seeded RNG can no longer collide on the same tmp inode. When `/dev/urandom` is unavailable the fallback entropy combines the Lua VM-local table address with `os.clock()` and does NOT share state with `math.random`, so the degraded path does not regress into the original collision. `cached_glow_render` also captures `os.rename` / `os.remove` errors into the timing log so failures are observable instead of silent. ([#6](https://github.com/passion0102/mermaid.yazi/issues/6))
+- Glow cache atomic-rename now uses a tmp filename that mixes `os.time`, `math.random`, and four bytes from `/dev/urandom`, so two preview isolates spawned in the same second with a freshly seeded RNG can no longer collide on the same tmp inode. When `/dev/urandom` is unavailable the fallback entropy combines the Lua VM-local table address with `os.clock()` and does NOT share state with `math.random`, so the degraded path does not regress into the original collision. `cached_glow_render` also captures `os.rename` / `os.remove` errors into the timing log so failures are observable instead of silent. ([#20](https://github.com/passion0102/mermaid.yazi/pull/20), closes [#6](https://github.com/passion0102/mermaid.yazi/issues/6))
 
 ### Added
 
-- `cache.tmp_path(final_path, opts?)` and `cache._vm_local_entropy` in `lib/cache.lua` (mirrored in the bundled cache inside `main.lua`). `opts.clock` / `opts.random` / `opts.entropy` / `opts.fallback_entropy` are injectable so the helpers are fully unit-testable.
-- Bundle-parity specs that read `main.lua` and assert the bundled cache mirrors the new `lib/cache.lua` API, so future drift between the source-of-truth lib and the shipped bundle is caught in CI.
+- `cache.tmp_path(final_path, opts?)` and `cache._vm_local_entropy` in `lib/cache.lua` (mirrored in the bundled cache inside `main.lua`). `opts.clock` / `opts.random` / `opts.entropy` / `opts.fallback_entropy` are injectable so the helpers are fully unit-testable. ([#20](https://github.com/passion0102/mermaid.yazi/pull/20))
+- Bundle-parity specs that read `main.lua` and assert the bundled cache mirrors the new `lib/cache.lua` API, so future drift between the source-of-truth lib and the shipped bundle is caught in CI. ([#20](https://github.com/passion0102/mermaid.yazi/pull/20))
 
 ## [0.3.0] — 2026-05-20
 
@@ -69,7 +71,8 @@ First tagged release. The release workflow builds a ship-only tarball (`main.lua
 - Cached `glow` output now keys on path + file size + content + width so changes past the read cap still bust the cache, and bigger-than-8 MB files surface an explicit `file exceeds N MB` message instead of silently truncating. ([#2](https://github.com/passion0102/mermaid.yazi/pull/2))
 - `glow` invocations are wrapped with `gtimeout` / `timeout` when available so a wedged process can't freeze the preview pipeline. ([#2](https://github.com/passion0102/mermaid.yazi/pull/2))
 
-[Unreleased]: https://github.com/passion0102/mermaid.yazi/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/passion0102/mermaid.yazi/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/passion0102/mermaid.yazi/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/passion0102/mermaid.yazi/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/passion0102/mermaid.yazi/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/passion0102/mermaid.yazi/releases/tag/v0.1.0
