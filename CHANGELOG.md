@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Bumped GitHub Actions versions to clear the Node.js 20 deprecation warning: `actions/checkout` v4→v6, `JohnnyMorganz/stylua-action` v4→v5, `leafo/gh-actions-lua` v10→v13, `leafo/gh-actions-luarocks` v4→v6, `actions/cache` v4→v5. No behavior change in CI / release jobs.
+
 ## [0.3.1] — 2026-05-21
 
 ### Fixed
