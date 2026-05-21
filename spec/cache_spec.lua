@@ -103,7 +103,7 @@ describe("cache.tmp_path", function()
     assert.is_truthy(p:match("^/tmp/foo%.tmp%."))
   end)
 
-  it("falls back to random when entropy source returns nil", function()
+  it("uses fallback_entropy when entropy returns nil", function()
     local p = cache.tmp_path("/tmp/foo", {
       clock = function()
         return 1
@@ -114,9 +114,59 @@ describe("cache.tmp_path", function()
       entropy = function()
         return nil
       end,
+      fallback_entropy = function()
+        return "fb1"
+      end,
     })
-    assert.is_string(p)
-    assert.is_truthy(p:match("^/tmp/foo%.tmp%."))
+    assert.are.equal("/tmp/foo.tmp.1.7.fb1", p)
+  end)
+
+  it("uses fallback_entropy when entropy returns empty string", function()
+    local p = cache.tmp_path("/tmp/foo", {
+      clock = function()
+        return 2
+      end,
+      random = function()
+        return 8
+      end,
+      entropy = function()
+        return ""
+      end,
+      fallback_entropy = function()
+        return "fb2"
+      end,
+    })
+    assert.are.equal("/tmp/foo.tmp.2.8.fb2", p)
+  end)
+
+  it("degraded fallback does not collapse onto the same random sequence", function()
+    -- Simulate two isolates with identical clock + identical math.random
+    -- seed + /dev/urandom unavailable. The fallback entropy must come from
+    -- a source independent of math.random, otherwise both isolates pick
+    -- the same tmp name and #6 regresses.
+    local p1 = cache.tmp_path("/tmp/x", {
+      clock = function()
+        return 100
+      end,
+      random = function()
+        return 42
+      end,
+      entropy = function()
+        return nil
+      end,
+    })
+    local p2 = cache.tmp_path("/tmp/x", {
+      clock = function()
+        return 100
+      end,
+      random = function()
+        return 42
+      end,
+      entropy = function()
+        return nil
+      end,
+    })
+    assert.are_not.equal(p1, p2)
   end)
 end)
 
@@ -128,6 +178,60 @@ describe("cache._urandom_entropy", function()
       assert.is_truthy(s:match("^[0-9a-f]+$"))
       assert.is_truthy(#s > 0)
     end
+  end)
+end)
+
+describe("cache._vm_local_entropy", function()
+  it("returns a non-empty string", function()
+    local s = cache._vm_local_entropy()
+    assert.is_string(s)
+    assert.is_truthy(#s > 0)
+  end)
+
+  it("does not return the same value twice in a row (os.clock advances)", function()
+    -- Even if table addresses happen to repeat across calls in the same
+    -- VM, os.clock keeps the suffix unique.
+    local a = cache._vm_local_entropy()
+    -- Burn a few cycles so os.clock advances.
+    local sink = 0
+    for i = 1, 10000 do
+      sink = sink + i
+    end
+    local b = cache._vm_local_entropy()
+    assert.are_not.equal(a, b)
+    assert.is_number(sink)
+  end)
+end)
+
+describe("main.lua bundled cache parity", function()
+  local function read(path)
+    local f = io.open(path, "r")
+    if not f then
+      return nil
+    end
+    local s = f:read("*all")
+    f:close()
+    return s
+  end
+
+  it("bundles cache.tmp_path / _urandom_entropy / _vm_local_entropy", function()
+    local src = read("main.lua")
+    assert.is_string(src)
+    assert.is_truthy(src:find("function c.tmp_path", 1, true))
+    assert.is_truthy(src:find("function c._urandom_entropy", 1, true))
+    assert.is_truthy(src:find("function c._vm_local_entropy", 1, true))
+    assert.is_truthy(src:find("/dev/urandom", 1, true))
+  end)
+
+  it("bundles cache.path and cache._default_hash signatures", function()
+    local src = read("main.lua")
+    assert.is_truthy(src:find("function c.path", 1, true))
+    assert.is_truthy(src:find("function c._default_hash", 1, true))
+  end)
+
+  it("uses cache.tmp_path in cached_glow_render", function()
+    local src = read("main.lua")
+    assert.is_truthy(src:find("cache.tmp_path(cache_file)", 1, true))
   end)
 end)
 

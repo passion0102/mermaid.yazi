@@ -181,6 +181,11 @@ do
     return string.format("%08x", x)
   end
 
+  function c._vm_local_entropy()
+    local addr = tostring({}):match("0x(%w+)") or "0"
+    return string.format("%s.%f", addr, os.clock())
+  end
+
   function c.tmp_path(final_path, opts)
     if type(final_path) ~= "string" then
       error("cache.tmp_path: final_path must be a string")
@@ -193,11 +198,12 @@ do
       return math.random(1, 2147483647)
     end
     local entropy = opts.entropy or c._urandom_entropy
+    local fallback = opts.fallback_entropy or c._vm_local_entropy
     local t = clock()
     local r = random()
     local e = entropy()
     if type(e) ~= "string" or #e == 0 then
-      e = string.format("%x", random())
+      e = fallback()
     end
     return string.format("%s.tmp.%d.%d.%s", final_path, t, r, e)
   end
@@ -662,9 +668,21 @@ local function cached_glow_render(content, width, path)
   if wf then
     wf:write(text)
     wf:close()
-    if not os.rename(tmp_file, cache_file) then
-      os.remove(tmp_file)
-      timing(t_total, "glow.cache-miss-rename-failed", string.format("bytes=%d", #text))
+    local ok, rn_err, rn_code = os.rename(tmp_file, cache_file)
+    if not ok then
+      local removed, rm_err = os.remove(tmp_file)
+      timing(
+        t_total,
+        "glow.cache-miss-rename-failed",
+        string.format(
+          "bytes=%d rename_err=%s rename_code=%s remove_ok=%s remove_err=%s",
+          #text,
+          tostring(rn_err),
+          tostring(rn_code),
+          tostring(removed),
+          tostring(rm_err)
+        )
+      )
       return text
     end
   end
