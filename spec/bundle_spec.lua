@@ -30,12 +30,65 @@ describe("bundle.transform", function()
 
   it("does not rename M when it appears as a substring of an identifier", function()
     -- `MAX` and `localMOO` must NOT be renamed. The transform must match M
-    -- only when it is a standalone identifier followed by `.`.
+    -- only when it is a standalone identifier.
     local out =
       bundle.transform("local M = {}\n\nlocal MAX = 10\nlocal localMOO = 1\nreturn M\n", "p")
     assert.is_truthy(out:find("MAX = 10", 1, true))
     assert.is_truthy(out:find("localMOO = 1", 1, true))
     assert.is_falsy(out:find("p%.AX", 1, false))
+  end)
+
+  it("renames every standalone M form, not just M.<name>", function()
+    -- M., M[, M:, alias = M, and { M } all have to be rewritten — otherwise
+    -- the bundled body refers to main.lua's outer `local M` (the plugin
+    -- table) and silently corrupts it.
+    local src = table.concat({
+      "local M = {}",
+      "local alias = M",
+      "M.x = 1",
+      "M['y'] = 2",
+      'M["z"] = 3',
+      "function M:run() end",
+      "local arr = { M }",
+      "return M",
+      "",
+    }, "\n")
+    local out = bundle.transform(src, "p")
+    assert.is_truthy(out:find("local alias = p", 1, true))
+    assert.is_truthy(out:find("p.x = 1", 1, true))
+    assert.is_truthy(out:find("p['y'] = 2", 1, true))
+    assert.is_truthy(out:find('p["z"] = 3', 1, true))
+    assert.is_truthy(out:find("function p:run()", 1, true))
+    assert.is_truthy(out:find("local arr = { p }", 1, true))
+    assert.is_falsy(out:find("%f[%w_]M%f[^%w_]"))
+  end)
+
+  it("errors if M only appears inside a string literal", function()
+    -- A regex rename would silently rewrite `"M.foo"` to `"p.foo"` at
+    -- runtime. The transform refuses so the contributor renames the
+    -- literal manually first.
+    local src = 'local M = {}\nlocal err = "M.foo failed"\nreturn M\n'
+    assert.has_error(function()
+      bundle.transform(src, "p")
+    end)
+  end)
+
+  it("errors if M only appears inside a line comment", function()
+    local src = "local M = {}\n-- M.foo is deprecated\nreturn M\n"
+    assert.has_error(function()
+      bundle.transform(src, "p")
+    end)
+  end)
+
+  it("does not flag M references that are mixed code + comment", function()
+    -- If M shows up in real code AND in a comment, the rename is still
+    -- correct on the code side. The string/comment check only fires
+    -- when *every* M is in a string or comment.
+    local src = "local M = {}\n-- M.foo is the entry point\nfunction M.foo()\nend\nreturn M\n"
+    local out = bundle.transform(src, "p")
+    assert.is_truthy(out:find("function p.foo", 1, true))
+    -- comment also gets renamed; that's an acceptable side-effect since
+    -- the comment is just stale documentation now.
   end)
 end)
 
@@ -104,6 +157,38 @@ describe("bundle.update_main", function()
       bundle.update_main("-- no markers here\n", sections, read_lib)
     end)
   end)
+
+  it("errors when there is more than one BUNDLE_BEGIN for the same lib", function()
+    local sections = { { lib = "lib/x.lua", public = "x", short = "xx" } }
+    local main_src = table.concat({
+      "-- BUNDLE_BEGIN: lib/x.lua",
+      "-- BUNDLE_END: lib/x.lua",
+      "-- BUNDLE_BEGIN: lib/x.lua",
+      "-- BUNDLE_END: lib/x.lua",
+      "",
+    }, "\n")
+    assert.has_error(function()
+      bundle.update_main(main_src, sections, read_lib)
+    end)
+  end)
+
+  it("errors when the lib body would emit a stray BUNDLE marker line", function()
+    -- A comment line in lib that looks like a marker would close the
+    -- region early; bail out instead of producing a corrupt main.lua.
+    local sections = { { lib = "lib/x.lua", public = "x", short = "xx" } }
+    local main_src = table.concat({
+      "-- BUNDLE_BEGIN: lib/x.lua",
+      "-- BUNDLE_END: lib/x.lua",
+      "",
+    }, "\n")
+    local function rl(path)
+      assert.are.equal("lib/x.lua", path)
+      return "local M = {}\n-- BUNDLE_END: lib/x.lua\nreturn M\n"
+    end
+    assert.has_error(function()
+      bundle.update_main(main_src, sections, rl)
+    end)
+  end)
 end)
 
 describe("bundle: real lib + real main parity", function()
@@ -124,5 +209,14 @@ describe("bundle: real lib + real main parity", function()
     local current = read_file("main.lua")
     local regenerated = bundle.update_main(current, bundle.sections, read_file)
     assert.are.equal(current, regenerated)
+  end)
+
+  it("the committed main.lua is syntactically valid Lua", function()
+    -- The byte-identity test above only catches drift between lib/ and
+    -- the bundled section. This catches the case where the transform
+    -- emits something that round-trips identically but is not valid
+    -- Lua (e.g. an unbalanced do/end after a future change).
+    local chunk, err = loadfile("main.lua")
+    assert.is_function(chunk, err)
   end)
 end)

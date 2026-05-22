@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `scripts/bundle.lua` — regenerates the `BUNDLE_BEGIN: lib/<x>.lua` / `BUNDLE_END` sections in `main.lua` from the canonical `lib/` sources, so the inlined parser / encoder / cache no longer has to be hand-mirrored after every edit. `--check` mode (exit 1 on drift) runs in CI before busted, so a missed regeneration fails the PR. ([#52](https://github.com/passion0102/mermaid.yazi/pull/22))
-- `spec/bundle_spec.lua` — unit-tests the transform / section-text / update-main pipeline, plus an integration test that regenerates `main.lua` from `lib/` and asserts byte-identity with the committed file.
+- `scripts/bundle.lua` — regenerates the `BUNDLE_BEGIN: lib/<x>.lua` / `BUNDLE_END` sections in `main.lua` from the canonical `lib/` sources, so the inlined parser / encoder / cache no longer has to be hand-mirrored after every edit. The transform renames every standalone `M` token (covering `M.`, `M:`, `M["x"]`, `local alias = M`, and `{ M }`), fails fast when the lib source contains an `M` reference only inside a string literal or comment (which a regex rewrite would silently corrupt), requires exactly one `BUNDLE_BEGIN` / `BUNDLE_END` pair per section, and refuses to emit a bundled body that itself contains a marker line. `--check` mode (exit 1 on drift) runs in CI before busted, alongside a `lua -e 'assert(loadfile("main.lua"))'` smoke step so a malformed regeneration is caught before tests. ([#22](https://github.com/passion0102/mermaid.yazi/pull/22))
+- `spec/bundle_spec.lua` — unit-tests the transform / section-text / update-main pipeline (including the M-rename forms, string / comment safety net, duplicate-marker rejection, and stray-marker detection), plus integration tests that regenerate `main.lua` from `lib/` and assert byte-identity with the committed file and that the committed `main.lua` loads as valid Lua.
 
 ### Changed
 

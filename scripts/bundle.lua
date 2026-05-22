@@ -41,15 +41,44 @@ end
 
 -- Convert a `lib/<x>.lua` source string into the body that lives inside
 -- the bundled `do ... end` block in main.lua. Strips the `local M = {}`
--- header and `return M` footer, renames standalone `M.` references to
--- `<short>.`, and indents every non-empty line by two spaces.
+-- header and `return M` footer, renames every standalone `M` token to
+-- `<short>` (so `M.foo`, `M:bar`, `M["x"]`, `local alias = M`, and
+-- `{ M }` are all rewritten consistently), and indents every non-empty
+-- line by two spaces. Errors out if any `M` identifier survives the
+-- rename — the bundled section would otherwise resolve to main.lua's
+-- outer `local M` (the plugin's public table) and silently corrupt it.
 function M.transform(lib_src, short)
   local body = lib_src
   body = body:gsub("^%s*local M = {}%s*\n", "")
   body = body:gsub("\nreturn M%s*\n?$", "\n")
-  -- Use Lua's frontier pattern so we only match M as a standalone token
-  -- (not as a substring of MAX, localMOO, etc.).
-  body = body:gsub("%f[%w_]M%.", short .. ".")
+  -- Safety net: a regex-based rename would also rewrite `M` inside string
+  -- literals and comments, which is almost never what the lib author meant.
+  -- If body has any `M` identifier and *all* of them disappear once strings
+  -- and comments are stripped, the rename would only affect those strings /
+  -- comments — bail out so the contributor can rename the literal first.
+  local stripped = body
+  stripped = stripped:gsub("%-%-%[%[.-%]%]", "")
+  stripped = stripped:gsub("%-%-[^\n]*", "")
+  stripped = stripped:gsub("%[%[.-%]%]", "")
+  stripped = stripped:gsub('"[^"\n]*"', "")
+  stripped = stripped:gsub("'[^'\n]*'", "")
+  local m_anywhere = body:find("%f[%w_]M%f[^%w_]")
+  local m_in_code = stripped:find("%f[%w_]M%f[^%w_]")
+  if m_anywhere and not m_in_code then
+    error(
+      "bundle: lib source references `M` only inside a string or comment; "
+        .. "the transform would rewrite it silently. Rename it in the lib first."
+    )
+  end
+  -- %f[%w_]M%f[^%w_] matches M only when both neighbors are non-identifier
+  -- characters, so MAX / localMOO / Make are left alone.
+  body = body:gsub("%f[%w_]M%f[^%w_]", short)
+  if body:find("%f[%w_]M%f[^%w_]") then
+    error(
+      "bundle: lib source still references the identifier `M` after rename — "
+        .. "the transform only strips a top-level `local M = {}` declaration."
+    )
+  end
   local out = {}
   for _, line in ipairs(split_lines(body)) do
     if line == "" then
@@ -84,29 +113,56 @@ end
 
 -- Replace the content between every `-- BUNDLE_BEGIN: <lib>` /
 -- `-- BUNDLE_END: <lib>` pair in main_src with freshly generated text.
--- read_lib is injected so spec tests can stub the filesystem.
+-- Requires exactly one BEGIN / END pair per section so a stray marker
+-- elsewhere in the file (or accidentally inside the bundled body) can't
+-- split the replacement range. read_lib is injected so spec tests can
+-- stub the filesystem.
 function M.update_main(main_src, sections, read_lib)
   local lines = split_lines(main_src)
   for _, s in ipairs(sections) do
     local begin_marker = "-- BUNDLE_BEGIN: " .. s.lib
     local end_marker = "-- BUNDLE_END: " .. s.lib
-    local i_begin, i_end
+    local i_begin, i_end, begin_count, end_count = nil, nil, 0, 0
     for idx, line in ipairs(lines) do
-      if line == begin_marker and not i_begin then
-        i_begin = idx
-      elseif line == end_marker and i_begin and not i_end then
-        i_end = idx
-        break
+      if line == begin_marker then
+        begin_count = begin_count + 1
+        if not i_begin then
+          i_begin = idx
+        end
+      elseif line == end_marker then
+        end_count = end_count + 1
+        if i_begin and not i_end then
+          i_end = idx
+        end
       end
     end
-    if not i_begin or not i_end then
-      error("bundle: markers not found for " .. s.lib)
+    if begin_count ~= 1 or end_count ~= 1 then
+      error(
+        "bundle: expected exactly one BUNDLE_BEGIN / BUNDLE_END pair for "
+          .. s.lib
+          .. " but found "
+          .. begin_count
+          .. " / "
+          .. end_count
+      )
+    end
+    if not i_begin or not i_end or i_end <= i_begin then
+      error("bundle: markers for " .. s.lib .. " are missing or out of order")
     end
     local lib_src = read_lib(s.lib)
     if not lib_src then
       error("bundle: cannot read " .. s.lib)
     end
     local generated = M.section_text(s, lib_src)
+    if
+      generated:find("\n%s*%-%- BUNDLE_BEGIN:", 1) or generated:find("\n%s*%-%- BUNDLE_END:", 1)
+    then
+      error(
+        "bundle: generated body for "
+          .. s.lib
+          .. " contains a BUNDLE marker line; rename it in the lib source so it cannot collide with the section delimiters."
+      )
+    end
     local new_block = split_lines(generated)
     local out = {}
     for i = 1, i_begin do
