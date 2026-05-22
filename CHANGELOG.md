@@ -7,9 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `scripts/bundle.lua` — regenerates the `BUNDLE_BEGIN: lib/<x>.lua` / `BUNDLE_END` sections in `main.lua` from the canonical `lib/` sources, so the inlined parser / encoder / cache no longer has to be hand-mirrored after every edit. `--check` mode (exit 1 on drift) runs in CI before busted, so a missed regeneration fails the PR. ([#52](https://github.com/passion0102/mermaid.yazi/pull/22))
+- `spec/bundle_spec.lua` — unit-tests the transform / section-text / update-main pipeline, plus an integration test that regenerates `main.lua` from `lib/` and asserts byte-identity with the committed file.
+
 ### Changed
 
-- Bumped GitHub Actions versions to clear the Node.js 20 deprecation warning: `actions/checkout` v4→v6, `JohnnyMorganz/stylua-action` v4→v5, `leafo/gh-actions-lua` v10→v13, `leafo/gh-actions-luarocks` v4→v6, `actions/cache` v4→v5. No behavior change in CI / release jobs.
+- Updated `CONTRIBUTING.md` to reflect the new workflow: edit `lib/<x>.lua`, run `busted`, then `lua scripts/bundle.lua` to regenerate `main.lua`. The previous "future bundling step will automate this" note is removed.
+- Bumped GitHub Actions versions to clear the Node.js 20 deprecation warning: `actions/checkout` v4→v6, `JohnnyMorganz/stylua-action` v4→v5, `leafo/gh-actions-lua` v10→v13, `leafo/gh-actions-luarocks` v4→v6, `actions/cache` v4→v5. No behavior change in CI / release jobs. ([#21](https://github.com/passion0102/mermaid.yazi/pull/21))
 
 ## [0.3.1] — 2026-05-21
 

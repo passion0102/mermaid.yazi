@@ -20,24 +20,33 @@ git checkout -b your-feature
 
 The plugin's runtime code lives in `main.lua`. yazi's `require` only resolves plugin-level modules (`<plugin>.<file>` → `<plugin>.yazi/<file>.lua`) and does not support `lib/` subdirectories, so `main.lua` bundles `parser` / `encoder` / `cache` inline.
 
-The `lib/` directory holds the canonical sources used for TDD with busted. When editing parser / encoder / cache logic, change `lib/<module>.lua` first, run `busted`, then sync the same change into the bundled copy at the top of `main.lua` by hand. (A future bundling step will automate this; see [CHANGELOG](./CHANGELOG.md) for status.)
+The `lib/` directory holds the canonical sources used for TDD with busted. **Edit `lib/<module>.lua` first, run `busted`, then regenerate the bundled section in `main.lua` with the bundle script:**
+
+```sh
+lua scripts/bundle.lua          # rewrite main.lua's BUNDLE_BEGIN/END sections from lib/
+lua scripts/bundle.lua --check  # exit 1 if main.lua is out of sync (CI runs this)
+```
+
+The bundle script strips each lib's `local M = {}` header / `return M` footer, renames `M.` to the bundled short name (`p` / `e` / `c`), indents the body by two spaces, and writes the result between the `-- BUNDLE_BEGIN: lib/<x>.lua` / `-- BUNDLE_END: lib/<x>.lua` markers in `main.lua`. The rest of `main.lua` is never touched. CI's busted job runs `--check` before tests, so a missed regeneration fails the PR.
 
 ```
 mermaid-yazi/
-├── main.lua            # yazi plugin entry; bundles lib/* inline
+├── main.lua            # yazi plugin entry; bundles lib/* inline (regenerated)
 ├── lib/                # source of truth for busted tests
 │   ├── parser.lua
 │   ├── encoder.lua
 │   ├── cache.lua
 │   └── fetcher.lua
-├── spec/               # busted specs for lib/*
+├── scripts/
+│   └── bundle.lua      # regenerates main.lua's bundled sections from lib/
+├── spec/               # busted specs for lib/ and scripts/
 └── docs/               # demo screenshot + vhs tape
 ```
 
 ## Tests
 
 ```sh
-busted                            # run all specs (35 currently)
+busted                            # run all specs (57 currently)
 busted spec/parser_spec.lua       # single spec file
 ```
 

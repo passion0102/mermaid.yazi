@@ -16,6 +16,7 @@ jobs:
           luaVersion: "5.4"
       - uses: leafo/gh-actions-luarocks@v6
       - run: luarocks install busted
+      - run: lua scripts/bundle.lua --check
       - run: busted
 
   stylua:
