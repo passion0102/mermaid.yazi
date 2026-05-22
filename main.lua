@@ -31,6 +31,7 @@ local config = {
   backend = "auto", -- "auto" | "mermaid.ink" | "mmdc". auto picks mmdc when on PATH, else mermaid.ink
 }
 
+-- BUNDLE_BEGIN: lib/parser.lua
 -- ==========================================
 -- Bundled: lib/parser.lua
 -- ==========================================
@@ -58,6 +59,7 @@ do
     if type(text) ~= "string" or text == "" then
       return {}
     end
+
     local lines = split_lines(text)
     local blocks = {}
     local i = 1
@@ -85,19 +87,23 @@ do
 
   parser = p
 end
+-- BUNDLE_END: lib/parser.lua
 
+-- BUNDLE_BEGIN: lib/encoder.lua
 -- ==========================================
 -- Bundled: lib/encoder.lua
 -- ==========================================
 local encoder
 do
   local e = {}
+
   local CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 
   function e.base64url(s)
     if type(s) ~= "string" or s == "" then
       return ""
     end
+
     local len = #s
     local out = {}
     local i = 1
@@ -106,10 +112,12 @@ do
       local b2 = string.byte(s, i + 1) or 0
       local b3 = string.byte(s, i + 2) or 0
       local n = b1 * 65536 + b2 * 256 + b3
+
       local c1 = math.floor(n / 262144) % 64
       local c2 = math.floor(n / 4096) % 64
       local c3 = math.floor(n / 64) % 64
       local c4 = n % 64
+
       out[#out + 1] = CHARS:sub(c1 + 1, c1 + 1)
       out[#out + 1] = CHARS:sub(c2 + 1, c2 + 1)
       if i + 1 <= len then
@@ -118,6 +126,7 @@ do
       if i + 2 <= len then
         out[#out + 1] = CHARS:sub(c4 + 1, c4 + 1)
       end
+
       i = i + 3
     end
     return table.concat(out)
@@ -133,7 +142,9 @@ do
 
   encoder = e
 end
+-- BUNDLE_END: lib/encoder.lua
 
+-- BUNDLE_BEGIN: lib/cache.lua
 -- ==========================================
 -- Bundled: lib/cache.lua
 -- ==========================================
@@ -141,22 +152,12 @@ local cache
 do
   local c = {}
 
-  function c._default_hash(s)
-    if _G.ya and type(_G.ya.hash) == "function" then
-      return _G.ya.hash(s)
-    end
-    local hash = 5381
-    for i = 1, #s do
-      hash = (hash * 33 + string.byte(s, i)) % 4294967296
-    end
-    return string.format("%08x", hash)
-  end
-
   function c.path(content, opts)
     opts = opts or {}
     if type(content) ~= "string" then
       error("cache.path: content must be a string")
     end
+
     local hash_fn = opts.hash or c._default_hash
     local dir = opts.dir or "/tmp"
     local ext = opts.ext or "png"
@@ -164,6 +165,44 @@ do
     return dir .. "/mermaid-yazi-" .. tostring(key) .. "." .. ext
   end
 
+  -- Build a unique tmp filename for atomic write-then-rename. Two yazi
+  -- preview isolates that hit the same cache key in the same second with
+  -- a freshly seeded RNG can otherwise collide; mixing in /dev/urandom
+  -- bytes makes that practically impossible. If urandom is unavailable we
+  -- fall back to a VM-local entropy source (table address + os.clock)
+  -- that does NOT share state with math.random, so a degraded read does
+  -- not collapse two isolates back onto the same RNG sequence.
+  -- opts is for tests:
+  --   opts.clock            () -> number    (default: os.time)
+  --   opts.random           () -> number    (default: math.random(1, 2^31 - 1))
+  --   opts.entropy          () -> string?   (default: c._urandom_entropy)
+  --   opts.fallback_entropy () -> string    (default: c._vm_local_entropy; used when entropy returns nil/"")
+  function c.tmp_path(final_path, opts)
+    if type(final_path) ~= "string" then
+      error("cache.tmp_path: final_path must be a string")
+    end
+    opts = opts or {}
+    local clock = opts.clock or function()
+      return os.time()
+    end
+    local random = opts.random or function()
+      return math.random(1, 2147483647)
+    end
+    local entropy = opts.entropy or c._urandom_entropy
+    local fallback = opts.fallback_entropy or c._vm_local_entropy
+
+    local t = clock()
+    local r = random()
+    local e = entropy()
+    if type(e) ~= "string" or #e == 0 then
+      e = fallback()
+    end
+    return string.format("%s.tmp.%d.%d.%s", final_path, t, r, e)
+  end
+
+  -- Read 4 bytes from /dev/urandom and return them as a lowercase hex string.
+  -- Returns nil if the device cannot be opened or short-reads, so callers can
+  -- use the fallback entropy source instead.
   function c._urandom_entropy()
     local f = io.open("/dev/urandom", "rb")
     if not f then
@@ -181,35 +220,29 @@ do
     return string.format("%08x", x)
   end
 
+  -- Fallback entropy that does not share state with math.random: combines the
+  -- Lua-implementation-defined table address (per VM / per preview isolate
+  -- because of ASLR + per-isolate heap) with the high-resolution os.clock so
+  -- two isolates spawned the same second still diverge here.
   function c._vm_local_entropy()
     local addr = tostring({}):match("0x(%w+)") or "0"
     return string.format("%s.%f", addr, os.clock())
   end
 
-  function c.tmp_path(final_path, opts)
-    if type(final_path) ~= "string" then
-      error("cache.tmp_path: final_path must be a string")
+  function c._default_hash(s)
+    if _G.ya and type(_G.ya.hash) == "function" then
+      return _G.ya.hash(s)
     end
-    opts = opts or {}
-    local clock = opts.clock or function()
-      return os.time()
+    local hash = 5381
+    for i = 1, #s do
+      hash = (hash * 33 + string.byte(s, i)) % 4294967296
     end
-    local random = opts.random or function()
-      return math.random(1, 2147483647)
-    end
-    local entropy = opts.entropy or c._urandom_entropy
-    local fallback = opts.fallback_entropy or c._vm_local_entropy
-    local t = clock()
-    local r = random()
-    local e = entropy()
-    if type(e) ~= "string" or #e == 0 then
-      e = fallback()
-    end
-    return string.format("%s.tmp.%d.%d.%s", final_path, t, r, e)
+    return string.format("%08x", hash)
   end
 
   cache = c
 end
+-- BUNDLE_END: lib/cache.lua
 
 -- ==========================================
 -- Plugin logic
